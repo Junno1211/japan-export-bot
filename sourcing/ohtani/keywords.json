@@ -1,0 +1,53 @@
+{
+  "department": "大谷翔平カード部",
+  "mercari_keywords": [
+    "大谷翔平 PSA10",
+    "大谷翔平 RC ルーキー",
+    "大谷翔平 直筆サイン Auto",
+    "大谷翔平 Topps",
+    "大谷翔平 Bowman Chrome",
+    "大谷翔平 BBM",
+    "大谷翔平 Epoch",
+    "大谷翔平 パラレル",
+    "Ohtani PSA",
+    "大谷翔平 BGS",
+    "大谷翔平 カルビー",
+    "大谷翔平 日本ハム",
+    "大谷翔平 Panini",
+    "大谷翔平 リフラクター",
+    "大谷翔平 ナンバード /99",
+    "大谷翔平 SGC",
+    "大谷翔平 ドジャース",
+    "Ohtani Topps Chrome",
+    "大谷翔平 直筆 ジャージ",
+    "大谷翔平 1st Bowman"
+  ],
+  "ebay_keywords": [
+    "Shohei Ohtani PSA 10",
+    "Shohei Ohtani Rookie Card",
+    "Shohei Ohtani Auto Autograph",
+    "Shohei Ohtani Topps Chrome",
+    "Shohei Ohtani Bowman Chrome",
+    "Shohei Ohtani BBM Japanese",
+    "Shohei Ohtani Parallel Refractor",
+    "Shohei Ohtani Japan Exclusive"
+  ],
+  "ng_keywords": ["ポケモン", "ポケカ", "ピカチュウ", "ワンピース", "ONE PIECE", "遊戯王", "デュエマ"],
+  "card_keywords": ["大谷翔平", "ohtani", "bbm", "epoch", "topps", "bowman", "panini", "カルビー", "日本ハム", "wbc", "psa", "bgs", "auto"],
+  "max_mercari_price": 250000,
+  "ebay_category_id": "261328",
+  "game_name": "Baseball",
+  "default_item_specifics": {
+    "Player/Athlete": "Shohei Ohtani",
+    "Sport": "Baseball",
+    "Country/Region of Manufacture": "Japan",
+    "Language": "Japanese"
+  },
+  "pricing_strategy": {
+    "min_usd": 30,
+    "max_usd": 2500,
+    "undercut_pct": 3,
+    "note": "MLB成績に連動して相場変動大。Sold直近7日の中央値を基準に3%アンダーカット"
+  },
+  "ai_prompt_hint": "This is a Shohei Ohtani baseball card from Japan. Focus on: card brand (Topps/Bowman/BBM/Epoch), year, RC status, grading (PSA/BGS), parallel type (Refractor/Chrome/Numbered), and autograph authenticity. Title must include 'Shohei Ohtani' at the front. Never use Pokemon or One Piece related words."
+}

@@ -1,0 +1,52 @@
+{
+  "department": "ワンピースカーダス部",
+  "mercari_keywords": [
+    "ワンピース カードダス ホロ",
+    "ワンピース カードダス プリズム",
+    "ワンピース カードダス 1999",
+    "ワンピース カードダス 2000",
+    "ワンピース カードダス 2001",
+    "ONE PIECE carddass",
+    "ワンピース PSA10",
+    "ワンピース SR SEC",
+    "ワンピース カードダス キラ",
+    "ワンピース カードダス バンダイ",
+    "ワンピース Alt Art",
+    "ワンピース カードゲーム パラレル",
+    "ワンピース カードゲーム リーダー",
+    "ワンピース PSA9",
+    "ワンピース カードダス グランドバトル",
+    "ワンピース トレカ ルフィ",
+    "ワンピース カードゲーム SEC",
+    "ONE PIECE card game SR",
+    "ワンピース カードダス フィルム"
+  ],
+  "ebay_keywords": [
+    "One Piece Carddass Holo Bandai",
+    "One Piece Carddass Prism Bandai",
+    "One Piece Carddass 1999 Japanese",
+    "One Piece PSA 10 Japanese",
+    "One Piece SR Alt Art Japanese",
+    "One Piece SEC Japanese Card",
+    "One Piece Carddass Vintage Bandai",
+    "One Piece Card Game Manga Rare"
+  ],
+  "ng_keywords": ["ポケモン", "ポケカ", "ピカチュウ", "大谷翔平", "Ohtani", "遊戯王", "野球"],
+  "card_keywords": ["ワンピース", "one piece", "カードダス", "carddass", "バンダイ", "bandai", "ルフィ", "luffy", "ホロ", "プリズム", "psa"],
+  "max_mercari_price": 250000,
+  "ebay_category_id": "183454",
+  "game_name": "One Piece Card Game",
+  "default_item_specifics": {
+    "Game": "One Piece Card Game",
+    "Manufacturer": "Bandai",
+    "Country/Region of Manufacture": "Japan",
+    "Language": "Japanese"
+  },
+  "pricing_strategy": {
+    "min_usd": 25,
+    "max_usd": 2500,
+    "undercut_pct": 3,
+    "note": "ヴィンテージ(1999-2001)は希少性高く強気OK。新弾は競合多いため相場の3%下。"
+  },
+  "ai_prompt_hint": "This is a One Piece card from Japan, likely a vintage Carddass by Bandai (1999-2001) or modern One Piece Card Game. Focus on: Holo/Prism type, year/series, character name, rarity (SR/SEC/Alt Art), and Bandai branding. Title must include 'One Piece' and 'Japanese'. For vintage cards, emphasize 'Carddass' and 'Bandai'. Never use Pokemon or Ohtani related words."
+}

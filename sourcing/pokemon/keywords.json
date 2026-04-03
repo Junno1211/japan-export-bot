@@ -1,0 +1,55 @@
+{
+  "department": "ポケモン部",
+  "mercari_keywords": [
+    "ポケモン PSA10 プロモ",
+    "ポケモン カードダス バンダイ",
+    "ポケカ 旧裏",
+    "ピカチュウ PSA10",
+    "ポケモン SR Alt Art",
+    "Pokemon carddass",
+    "ポケモン 初期 プロモ",
+    "リザードン PSA",
+    "ポケモン SEC",
+    "ポケカ SAR",
+    "ポケモン コロコロ プロモ",
+    "ポケモン 映画 プロモ",
+    "ポケカ PSA10 プロモ",
+    "ピカチュウ プロモ 未開封",
+    "リザードン SAR",
+    "ポケモン 25th プロモ",
+    "ポケカ UR 金",
+    "ポケモン マスターボール ミラー",
+    "ピカチュウ VMAX",
+    "ポケモン エリカ PSA",
+    "ポケカ かんこうきゃく",
+    "ポケモン ミュウツー PSA"
+  ],
+  "ebay_keywords": [
+    "Pokemon PSA 10 Promo Japanese",
+    "Pokemon Carddass Bandai Japanese",
+    "Pokemon Vintage Old Back Japanese",
+    "Pikachu PSA 10 Promo Japanese",
+    "Pokemon SR Alt Art Japanese",
+    "Charizard PSA Japanese",
+    "Pokemon No Rarity Symbol Japanese",
+    "Pokemon SAR Japanese"
+  ],
+  "ng_keywords": ["ワンピース", "ONE PIECE", "大谷翔平", "Ohtani", "遊戯王", "野球", "bbm"],
+  "card_keywords": ["ポケモン", "pokemon", "ポケカ", "ピカチュウ", "pikachu", "リザードン", "charizard", "カードダス", "carddass", "バンダイ", "旧裏", "psa"],
+  "max_mercari_price": 250000,
+  "ebay_category_id": "183454",
+  "game_name": "Pokémon TCG",
+  "default_item_specifics": {
+    "Game": "Pokémon TCG",
+    "Manufacturer": "Nintendo / Bandai",
+    "Country/Region of Manufacture": "Japan",
+    "Language": "Japanese"
+  },
+  "pricing_strategy": {
+    "min_usd": 25,
+    "max_usd": 2500,
+    "undercut_pct": 2,
+    "note": "PSA10は希少性でプレミアム。旧裏・プロモは強気OK。現行SRは競合多いため相場の2%下。"
+  },
+  "ai_prompt_hint": "This is a Japanese Pokemon card. Focus on: card name (in English), set/series, year, grading (PSA/BGS), rarity (Promo/SR/Alt Art/SAR/SEC), and whether it's vintage Carddass (Bandai) or modern TCG. For old back cards, include 'Old Back' or 'No Rarity Symbol'. Title must include 'Pokemon' and 'Japanese'. Never use One Piece or Ohtani related words."
+}
