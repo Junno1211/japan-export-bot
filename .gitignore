@@ -1,6 +1,18 @@
 # Secrets — never commit
 .env
+config.py
 google_credentials.json
+processed_orders.json
+processed_messages.json
+
+# Data files (contain business data)
+items.csv
+seen_ids.json
+relist_candidates.json
+daive_keywords.csv
+DAIVEキーワード.xlsx
+dupes_to_remove.txt
+ebay_dupes_to_end.txt
 
 # Python
 __pycache__/
@@ -21,6 +33,7 @@ env/
 # IDE
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 
@@ -30,3 +43,20 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
+batch_cron.log
+local_monitor.log
+cron.log
+
+# Debug files
+debug_*.html
+debug_*.png
+output_*.log
+test_scrape.log
+
+# Backups
+backups/
+
+# Lock files
+*.lock
+.main_lock

@@ -51,7 +51,9 @@
       "Bash(crontab -l)",
       "Bash(echo \"0 8 * * * cd ~/Downloads/eBay/海外輸出ボット && python3 daily_report.py >> logs/daily_report.log 2>&1\")",
       "Bash(crontab /tmp/crontab_tmp)",
-      "Bash(1:*)"
+      "Bash(1:*)",
+      "Bash(echo \"0 * * * * cd ~/Downloads/eBay/海外輸出ボット && python3 inventory_manager.py >> logs/inventory.log 2>&1\")",
+      "Bash(echo \"*/5 * * * * cd ~/Downloads/eBay/海外輸出ボット && python3 order_monitor.py >> logs/orders.log 2>&1\")"
     ]
   }
 }
