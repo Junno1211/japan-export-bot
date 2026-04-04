@@ -53,7 +53,11 @@
       "Bash(crontab /tmp/crontab_tmp)",
       "Bash(1:*)",
       "Bash(echo \"0 * * * * cd ~/Downloads/eBay/海外輸出ボット && python3 inventory_manager.py >> logs/inventory.log 2>&1\")",
-      "Bash(echo \"*/5 * * * * cd ~/Downloads/eBay/海外輸出ボット && python3 order_monitor.py >> logs/orders.log 2>&1\")"
+      "Bash(echo \"*/5 * * * * cd ~/Downloads/eBay/海外輸出ボット && python3 order_monitor.py >> logs/orders.log 2>&1\")",
+      "Bash(ls -la ~/Downloads/eBay/海外輸出ボット/logs/inventory*.log)",
+      "Bash(grep ワンピース.*✅ /private/tmp/claude-501/-Users-miyazakijunnosuke-Downloads-eBay--------/b684ba88-6b08-44de-9f09-66d8f6954c80/tasks/bt3bwm23h.output)",
+      "Bash(grep -B1 ✅.*利益 /private/tmp/claude-501/-Users-miyazakijunnosuke-Downloads-eBay--------/b684ba88-6b08-44de-9f09-66d8f6954c80/tasks/bt3bwm23h.output)",
+      "Bash(echo \"0 21 4 4 * cd ~/Downloads/eBay/海外輸出ボット && python3 auto_lister.py >> logs/auto_lister_20260404.log 2>&1\")"
     ]
   }
 }

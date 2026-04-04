@@ -3,11 +3,103 @@ import base64
 import requests
 import logging
 import urllib.parse
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from config import EBAY_APP_ID, EBAY_CERT_ID, EBAY_AUTH_TOKEN, EBAY_SITE_ID, EBAY_ENV
 import xml.etree.ElementTree as ET
 
 logger = logging.getLogger(__name__)
+
+_FINDING_NS = {"ns": "http://www.ebay.com/marketplace/search/v1/services"}
+
+
+def _median_usd(prices: List[float]) -> float:
+    s = sorted(prices)
+    n = len(s)
+    mid = n // 2
+    if n % 2:
+        return s[mid]
+    return (s[mid - 1] + s[mid]) / 2.0
+
+
+def get_completed_sold_prices_usd(keyword: str, days: int = 90, max_entries: int = 80) -> List[float]:
+    """
+    findCompletedItems で指定期間内に落札/販売完了した USD 価格を収集（1ページまで）。
+    """
+    url = f"https://svcs.ebay.com/services/search/FindingService/v1"
+    end_time_from = time.time() - (days * 86400)
+    time_str = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(end_time_from))
+    params = {
+        "OPERATION-NAME": "findCompletedItems",
+        "SERVICE-VERSION": "1.13.0",
+        "SECURITY-APPNAME": EBAY_APP_ID,
+        "RESPONSE-DATA-FORMAT": "XML",
+        "keywords": keyword,
+        "itemFilter(0).name": "SoldItemsOnly",
+        "itemFilter(0).value": "true",
+        "itemFilter(1).name": "EndTimeFrom",
+        "itemFilter(1).value": time_str,
+        "paginationInput.entriesPerPage": str(max(1, min(max_entries, 100))),
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        if "errorMessage" in resp.text:
+            return []
+        root = ET.fromstring(resp.text)
+        prices: List[float] = []
+        for item in root.findall(".//ns:item", _FINDING_NS):
+            ss = item.find("ns:sellingStatus", _FINDING_NS)
+            if ss is None:
+                continue
+            cp = ss.find("ns:currentPrice", _FINDING_NS)
+            if cp is None or not (cp.text and cp.text.strip()):
+                continue
+            if (cp.get("currencyId") or "").upper() != "USD":
+                continue
+            try:
+                prices.append(float(cp.text))
+            except ValueError:
+                continue
+        return prices
+    except Exception as e:
+        logger.warning(f"get_completed_sold_prices_usd failed (keyword={keyword!r}): {e}")
+        return []
+
+
+def median_sold_price_usd(
+    keyword: str, days: int = 90, max_entries: int = 80, min_samples: int = 2
+) -> Optional[float]:
+    prices = get_completed_sold_prices_usd(keyword, days=days, max_entries=max_entries)
+    if len(prices) < min_samples:
+        return None
+    return _median_usd(prices)
+
+
+def resolve_reference_sold_price_usd(
+    primary_query: str,
+    similar_queries: List[str],
+    days_wide: int = 90,
+    days_similar: int = 120,
+    min_samples: int = 2,
+    max_entries: int = 80,
+) -> Tuple[Optional[float], str]:
+    """
+    まず primary を広い日数で Sold 中央値、件数不足なら類似クエリを順に試す。
+    Returns (median_usd, description_for_logs)
+    """
+    primary_lower = primary_query.strip().lower()
+    prices = get_completed_sold_prices_usd(primary_query, days=days_wide, max_entries=max_entries)
+    if len(prices) >= min_samples:
+        return _median_usd(prices), f"{primary_query} ({days_wide}d Sold中央値 n={len(prices)})"
+
+    for sq in similar_queries:
+        s = sq.strip()
+        if not s or s.lower() == primary_lower:
+            continue
+        prices = get_completed_sold_prices_usd(s, days=days_similar, max_entries=max_entries)
+        if len(prices) >= min_samples:
+            return _median_usd(prices), f"{s} (類似{days_similar}d Sold中央値 n={len(prices)})"
+
+    return None, ""
 
 _OAUTH_TOKEN = None
 _TOKEN_EXPIRY = 0
@@ -58,7 +150,7 @@ def _get_winning_titles_via_api(keyword: str) -> List[str]:
         resp = requests.get(url, params=params, timeout=10)
         if "errorMessage" in resp.text: return [] # Rate limit / Security error
         root = ET.fromstring(resp.text)
-        ns = {'ns': 'http://www.ebay.com/marketplace/search/v1/services'}
+        ns = _FINDING_NS
         titles = [t.text for t in root.findall(".//ns:title", ns)]
         return list(set(titles))[:5]
     except Exception as e:
@@ -142,7 +234,7 @@ def get_sold_velocity(keyword: str, days: int = 7) -> int:
         if "errorMessage" in resp.text:
             return 0
         root = ET.fromstring(resp.text)
-        ns = {'ns': 'http://www.ebay.com/marketplace/search/v1/services'}
+        ns = _FINDING_NS
         count_node = root.find(".//ns:paginationOutput/ns:totalEntries", ns)
         if count_node is not None and count_node.text:
             return int(count_node.text)
@@ -192,7 +284,7 @@ def get_market_price(keyword: str) -> Optional[float]:
         if "errorMessage" in resp.text:
             return None
         root = ET.fromstring(resp.text)
-        ns = {'ns': 'http://www.ebay.com/marketplace/search/v1/services'}
+        ns = _FINDING_NS
         price_nodes = root.findall(".//ns:currentPrice", ns)
         prices = []
         for p in price_nodes:

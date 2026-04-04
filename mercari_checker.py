@@ -86,7 +86,9 @@ def check_mercari_status(url: str, delay: float = 2.0) -> dict:
             return {"status": "deleted", "title": "", "price": ""}
 
         if resp.status_code != 200:
-            return _check_by_html(url)
+            # Playwright内から呼ばれる場合ネストエラーになるため、
+            # APIが使えない場合はerrorを返す（呼び出し元で判断）
+            return {"status": "error", "title": "", "price": "", "error": f"API {resp.status_code}"}
 
         data = resp.json().get("data", {})
         status = data.get("status", "")

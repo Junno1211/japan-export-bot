@@ -601,7 +601,7 @@ def backup_critical_files():
     logger.info(f"💾 バックアップ完了")
 
 
-def run_auto_listing(dry_run: bool = False):
+def run_auto_listing(dry_run: bool = False, max_success: int = None):
     lock_file = open('/tmp/auto_lister.lock', 'w')
     try: fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except: return
@@ -673,12 +673,17 @@ def run_auto_listing(dry_run: bool = False):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
         try:
+            listing_capped = False
             for s_name in [PRIORITY_SHEET_NAME, AUTO_SHEET_NAME] + AUTO_SHEETS:
                 items = read_active_items(s_name)
                 if not items: continue
 
                 logger.info(f"--- チャンネル開始: {s_name} ({len(items)}件) ---")
                 for item in items:
+                    if max_success is not None and success_count >= max_success:
+                        logger.info(f"⏹️ 出品成功 {max_success}件に達したため終了")
+                        listing_capped = True
+                        break
                     # All APIs down check — abort the entire run
                     if (not gemini_breaker.can_proceed() and
                             not ebay_breaker.can_proceed() and
@@ -760,10 +765,11 @@ def run_auto_listing(dry_run: bool = False):
                     # 最終利益・ROI検証
                     final_profit = calc_profit(price_usd, mercari_price)
                     roi = final_profit / mercari_price * 100 if mercari_price > 0 else 0
-                    if final_profit < 3000:
-                        update_item_status(row_num, f"⚠️ 利益不足 ¥{int(final_profit):,}", s_name); continue
-                    if mercari_price >= 50000 and final_profit < 5000:
-                        update_item_status(row_num, f"⚠️ 高額商品利益不足 ¥{int(final_profit):,}", s_name); continue
+                    min_profit_required = max(3000, profit_jpy)
+                    if mercari_price >= 50000:
+                        min_profit_required = max(min_profit_required, 5000)
+                    if final_profit < min_profit_required:
+                        update_item_status(row_num, f"⚠️ 利益不足 ¥{int(final_profit):,} (要¥{min_profit_required:,}+)", s_name); continue
                     logger.info(f"  💰 出品価格${price_usd} | 利益¥{int(final_profit):,} | ROI{roi:.0f}%")
 
                     # 部署自動判定（タイトル・説明文から）
@@ -852,6 +858,8 @@ def run_auto_listing(dry_run: bool = False):
                         fail_count += 1
                     else:
                         logger.info(f"  [DRY RUN] 成功想定: {url} (${price_usd})")
+                if listing_capped:
+                    break
         finally:
             browser.close()
 
@@ -862,5 +870,6 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--max-success", type=int, metavar="N", help="この実行でeBay出品に成功したら打ち切る件数")
     args = parser.parse_args()
-    run_auto_listing(dry_run=args.dry_run)
+    run_auto_listing(dry_run=args.dry_run, max_success=args.max_success)

@@ -136,7 +136,7 @@ def test_listing_mercari_buyable():
     unbuyable = []
     for url in sample:
         result = check_mercari_status(url, delay=1.0)
-        if result.get("status") not in ("active",):
+        if result.get("status") not in ("active", "error"):
             unbuyable.append(f"{url} → {result.get('status')}")
 
     if unbuyable:

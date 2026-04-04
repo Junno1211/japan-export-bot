@@ -1,40 +1,40 @@
 {
   "department": "大谷翔平カード部",
   "mercari_keywords": [
-    "大谷翔平 PSA10",
-    "大谷翔平 RC ルーキー",
-    "大谷翔平 直筆サイン Auto",
-    "大谷翔平 Topps",
-    "大谷翔平 Bowman Chrome",
     "大谷翔平 BBM",
-    "大谷翔平 Epoch",
-    "大谷翔平 パラレル",
-    "Ohtani PSA",
-    "大谷翔平 BGS",
-    "大谷翔平 カルビー",
-    "大谷翔平 日本ハム",
-    "大谷翔平 Panini",
-    "大谷翔平 リフラクター",
-    "大谷翔平 ナンバード /99",
-    "大谷翔平 SGC",
-    "大谷翔平 ドジャース",
-    "Ohtani Topps Chrome",
-    "大谷翔平 直筆 ジャージ",
-    "大谷翔平 1st Bowman"
+    "BBM 大谷翔平",
+    "大谷翔平 BBM ルーキー",
+    "大谷翔平 BBM パラレル",
+    "大谷翔平 BBM 直筆",
+    "Ohtani BBM",
+    "BBM 大谷 日本ハム",
+    "大谷翔平 BBM 1st",
+    "大谷翔平 BBM サイン",
+    "大谷翔平 BBM ルーキーカード"
   ],
   "ebay_keywords": [
-    "Shohei Ohtani PSA 10",
-    "Shohei Ohtani Rookie Card",
-    "Shohei Ohtani Auto Autograph",
-    "Shohei Ohtani Topps Chrome",
-    "Shohei Ohtani Bowman Chrome",
-    "Shohei Ohtani BBM Japanese",
-    "Shohei Ohtani Parallel Refractor",
-    "Shohei Ohtani Japan Exclusive"
+    "Shohei Ohtani BBM",
+    "Shohei Ohtani BBM rookie",
+    "Shohei Ohtani BBM Japanese baseball card",
+    "Shohei Ohtani BBM 1st",
+    "Ohtani BBM card"
   ],
+  "ebay_similar_sold_queries": [
+    "Shohei Ohtani BBM Nippon Ham Fighters",
+    "Shohei Ohtani BBM Japanese baseball card",
+    "Shohei Ohtani 2016 BBM",
+    "Shohei Ohtani 2013 BBM",
+    "Shohei Ohtani 2015 BBM"
+  ],
+  "similar_sold_days_primary": 90,
+  "similar_sold_days": 120,
+  "similar_sold_min_samples": 2,
   "ng_keywords": ["ポケモン", "ポケカ", "ピカチュウ", "ワンピース", "ONE PIECE", "遊戯王", "デュエマ"],
-  "card_keywords": ["大谷翔平", "ohtani", "bbm", "epoch", "topps", "bowman", "panini", "カルビー", "日本ハム", "wbc", "psa", "bgs", "auto"],
-  "max_mercari_price": 250000,
+  "card_keywords": ["bbm"],
+  "min_mercari_price": 1000,
+  "max_mercari_price": 50000,
+  "min_profit_jpy": 6000,
+  "max_items_per_keyword": 12,
   "ebay_category_id": "261328",
   "game_name": "Baseball",
   "default_item_specifics": {
@@ -47,7 +47,7 @@
     "min_usd": 30,
     "max_usd": 2500,
     "undercut_pct": 3,
-    "note": "MLB成績に連動して相場変動大。Sold直近7日の中央値を基準に3%アンダーカット"
+    "note": "BBM大谷のみ・仕入上限¥50,000・期待利益¥6,000+"
   },
-  "ai_prompt_hint": "This is a Shohei Ohtani baseball card from Japan. Focus on: card brand (Topps/Bowman/BBM/Epoch), year, RC status, grading (PSA/BGS), parallel type (Refractor/Chrome/Numbered), and autograph authenticity. Title must include 'Shohei Ohtani' at the front. Never use Pokemon or One Piece related words."
+  "ai_prompt_hint": "This is a Shohei Ohtani BBM (Japanese baseball card) from Japan. Focus on: BBM year/set, RC status, parallel, autograph. Title must include 'Shohei Ohtani' at the front. Never use Pokemon or One Piece related words."
 }
