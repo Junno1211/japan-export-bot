@@ -1,0 +1,57 @@
+{
+  "department": "ビックリマン部署",
+  "mercari_keywords": [
+    "ビックリマン ヘッドシール スーパーゼウス",
+    "ビックリマン 悪魔VS天使 キラ",
+    "ビックリマン コラボ 限定",
+    "スーパービックリマン ヘッド"
+  ],
+  "ebay_keywords": [
+    "Bikkuriman Sticker Head Super Zeus Devil Angel Lotte Japan Vintage",
+    "Bikkuriman Devil vs Angel Kira Holo Japanese Lotte",
+    "Bikkuriman Collab Limited Sticker Lotte Japan",
+    "Super Bikkuriman Head Seal Lotte Vintage"
+  ],
+  "ebay_similar_sold_queries": [
+    "Bikkuriman head seal Super Zeus Japanese Lotte",
+    "Bikkuriman Devil Angel kira sticker Japan",
+    "Bikkuriman collab limited Lotte sticker"
+  ],
+  "similar_sold_days_primary": 90,
+  "similar_sold_days": 365,
+  "similar_sold_min_samples": 2,
+  "ng_keywords": ["ポケモン", "ワンピース", "遊戯王", "Pokemon", "One Piece"],
+  "card_keywords": [
+    "ビックリマン",
+    "bikkuriman",
+    "ヘッド",
+    "ロッテ",
+    "lotte",
+    "悪魔",
+    "天使",
+    "キラ",
+    "シール",
+    "スーパーゼウス",
+    "コラボ"
+  ],
+  "min_mercari_price": 200,
+  "max_mercari_price": 250000,
+  "min_profit_jpy": 3000,
+  "shipping_cost_jpy": 3000,
+  "exchange_rate_jpy_per_usd": 155,
+  "max_items_per_keyword": 10,
+  "ebay_category_id": "1345",
+  "game_name": "Bikkuriman",
+  "default_item_specifics": {
+    "Franchise": "Bikkuriman",
+    "Country/Region of Manufacture": "Japan",
+    "Language": "Japanese"
+  },
+  "pricing_strategy": {
+    "min_usd": 10,
+    "max_usd": 2499,
+    "undercut_pct": 3,
+    "note": "単価低めはまとめ出品で¥3,000利益・$2,499上限厳守"
+  },
+  "ai_prompt_hint": "Lotte Bikkuriman stickers: head seals, kira/hologram, collab limited. Title example: Bikkuriman Sticker Head Super Zeus Devil Angel Series 1 Vintage Lotte Japan. Bundle low-value singles to hit profit target. No Pokemon or One Piece."
+}

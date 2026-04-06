@@ -35,7 +35,7 @@ MAX_ITEMS_PER_KEYWORD = 10
 SEEN_FILE = "seen_ids.json"
 
 # --max-additions 用（1実行あたりのシート追加上限・global 回避）
-_SOURCING_RUN = {"max_additions": None, "added": 0}
+_SOURCING_RUN = {"max_additions": None, "added": 0, "dry_run": False}
 
 
 def sourcing_budget_exhausted() -> bool:
@@ -171,6 +171,11 @@ def append_to_auto_sheet(url: str, profit: int, title: str, mercari_price: int, 
     # ジャンル判定
     sheet_name = detect_genre_sheet(title, basis)
 
+    # dry-run: シート書き込みをスキップしてログのみ
+    if _SOURCING_RUN["dry_run"]:
+        logger.info(f"🧪 [DRY-RUN] [{sheet_name}] 追加予定: {title[:30]}... 利益¥{profit:,} (¥{mercari_price:,}) ({basis})")
+        return True
+
     try:
         service = _get_service()
         create_sheet_if_not_exists(sheet_name)
@@ -293,7 +298,8 @@ def _build_similar_sold_queries(dept: Optional[dict], mercari_keyword: str) -> L
     if dept:
         out.extend(dept.get("ebay_similar_sold_queries") or [])
     ck = [str(c).lower() for c in (dept.get("card_keywords") or [])] if dept else []
-    if "bbm" in ck:
+    # 大谷部署のみ: BBM 類似Soldクエリ（他BBM部署で混在させない）
+    if "bbm" in ck and os.path.basename(dept.get("_dir", "")) == "ohtani":
         out.extend(
             [
                 "Shohei Ohtani BBM Nippon Ham Fighters",
@@ -305,7 +311,8 @@ def _build_similar_sold_queries(dept: Optional[dict], mercari_keyword: str) -> L
         )
     for m in re.finditer(r"(20[0-2]\d|19\d{2})", mercari_keyword):
         y = m.group(1)
-        out.insert(0, f"Shohei Ohtani BBM {y}")
+        if os.path.basename(dept.get("_dir", "")) == "ohtani":
+            out.insert(0, f"Shohei Ohtani BBM {y}")
     seen = set()
     uniq: List[str] = []
     for q in out:
@@ -360,6 +367,14 @@ def scrape_and_source(keyword: str, dept: Optional[dict] = None):
     days_wide = int(dept.get("similar_sold_days_primary", 90)) if dept else 90
     days_similar = int(dept.get("similar_sold_days", 120)) if dept else 120
     min_sold_samples = int(dept.get("similar_sold_min_samples", 2)) if dept else 2
+    # 大谷部署のみ: similar_sold_min_samples<=0 は「Sold最低件数の閾値を緩める」指定とみなし、
+    # 中央値計算に必要な実質下限 1 件へ正規化（0 のままだと len<0 となり空配列medianで不整合）
+    if (
+        dept
+        and os.path.basename(dept.get("_dir", "")) == "ohtani"
+        and min_sold_samples <= 0
+    ):
+        min_sold_samples = 1
     similar_sold_queries = _build_similar_sold_queries(dept, keyword)
 
     # eBayクエリ取得（部署キーワード直接 or 翻訳）
@@ -483,7 +498,8 @@ def scrape_and_source(keyword: str, dept: Optional[dict] = None):
                         item_en = translate_to_english(item.get("title", ""))
                         item_market = get_market_price(item_en) if item_en else None
                         ck = [str(c).lower() for c in (dept.get("card_keywords") or [])] if dept else []
-                        if (not item_market or item_market <= 0) and "bbm" in ck:
+                        _dept_dir = os.path.basename(dept.get("_dir", "")) if dept else ""
+                        if (not item_market or item_market <= 0) and "bbm" in ck and _dept_dir == "ohtani":
                             for y in re.findall(r"(20[0-2]\d|19\d{2})", item.get("title", "") or "")[:2]:
                                 item_market = median_sold_price_usd(
                                     f"Shohei Ohtani BBM {y}",
@@ -499,6 +515,18 @@ def scrape_and_source(keyword: str, dept: Optional[dict] = None):
                                     )
                                     if item_market:
                                         break
+                        elif (
+                            (not item_market or item_market <= 0)
+                            and "bbm" in ck
+                            and _dept_dir != "ohtani"
+                            and dept
+                        ):
+                            for sq in similar_sold_queries[:5]:
+                                item_market = median_sold_price_usd(
+                                    sq, days=days_similar, min_samples=min_sold_samples
+                                )
+                                if item_market:
+                                    break
                         # 個別相場が取れた場合はそちらを使用、取れない場合はキーワード相場を使用
                         actual_market = item_market if item_market and item_market > 0 else market_price_usd
                         sell_price_usd = calculate_competitive_price(actual_market, dept)
@@ -525,14 +553,21 @@ def scrape_and_source(keyword: str, dept: Optional[dict] = None):
         finally:
             browser.close()
     update_heartbeat(f"✅ [{dept_name}] Sourcing Complete")
-    save_seen_ids(seen_ids)
+    if not _SOURCING_RUN["dry_run"]:
+        save_seen_ids(seen_ids)
+    else:
+        logger.info(f"🧪 [DRY-RUN] seen_ids保存スキップ（{len(seen_ids)}件）")
 
 if __name__ == "__main__":
     import argparse
     _ap = argparse.ArgumentParser(description="Mercari reverse sourcing → 自動出品シート")
     _ap.add_argument("--dept", metavar="DIR", help="sourcing 配下の部署フォルダ名のみ実行（例: ohtani）")
     _ap.add_argument("--max-additions", type=int, metavar="N", help="この実行でシートに追加する行の上限")
+    _ap.add_argument("--dry-run", action="store_true", help="シート書き込み・seen_ids保存をスキップしてログのみ出力")
     _cli = _ap.parse_args()
+    if _cli.dry_run:
+        _SOURCING_RUN["dry_run"] = True
+        logger.info("🧪 DRY-RUNモード: シート書き込み・seen_ids保存をスキップします")
     if _cli.max_additions is not None:
         _SOURCING_RUN["max_additions"] = max(0, _cli.max_additions)
         _SOURCING_RUN["added"] = 0

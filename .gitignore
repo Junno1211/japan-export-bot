@@ -2,6 +2,7 @@
 .env
 config.py
 google_credentials.json
+*SSH鍵設定.command
 processed_orders.json
 processed_messages.json
 

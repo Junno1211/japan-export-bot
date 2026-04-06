@@ -1,0 +1,55 @@
+{
+  "department": "ドラゴンボール Carddass 部署",
+  "mercari_keywords": [
+    "ドラゴンボール カードダス プリズム",
+    "DBZ カードダス ホロ キラ",
+    "ドラゴンボール スーパーバトル プリズム"
+  ],
+  "ebay_keywords": [
+    "Dragon Ball Z Carddass Prism Holo Bandai Japanese Vintage",
+    "DBZ Carddass Holo Kira Bandai Japanese",
+    "Dragon Ball Super Battle Prism Carddass Japanese"
+  ],
+  "ebay_similar_sold_queries": [
+    "Dragon Ball Z Carddass Prism Japanese Bandai",
+    "DBZ Carddass Holo Japanese Vintage",
+    "Dragon Ball Carddass Prism Bandai 1990s"
+  ],
+  "similar_sold_days_primary": 90,
+  "similar_sold_days": 365,
+  "similar_sold_min_samples": 2,
+  "ng_keywords": ["ポケモン", "ワンピース", "遊戯王", "Pokemon", "One Piece"],
+  "card_keywords": [
+    "ドラゴンボール",
+    "dragon ball",
+    "dbz",
+    "カードダス",
+    "carddass",
+    "プリズム",
+    "バンダイ",
+    "bandai",
+    "ホロ",
+    "キラ",
+    "スーパーバトル"
+  ],
+  "min_mercari_price": 500,
+  "max_mercari_price": 250000,
+  "min_profit_jpy": 3000,
+  "shipping_cost_jpy": 3000,
+  "exchange_rate_jpy_per_usd": 155,
+  "max_items_per_keyword": 10,
+  "ebay_category_id": "1345",
+  "game_name": "Dragon Ball",
+  "default_item_specifics": {
+    "Franchise": "Dragon Ball",
+    "Country/Region of Manufacture": "Japan",
+    "Language": "Japanese"
+  },
+  "pricing_strategy": {
+    "min_usd": 15,
+    "max_usd": 2499,
+    "undercut_pct": 3,
+    "note": "プリズム/ホロ中心・$2,499上限厳守"
+  },
+  "ai_prompt_hint": "Japanese Bandai Dragon Ball Z Carddass (1988–2000s): prism, double prism, holo/kira, or graded PSA7+. Title pattern: Dragon Ball Z Carddass Prism Holo #[no.] [character] Bandai Japanese Vintage. Exclude Pokemon and One Piece words."
+}

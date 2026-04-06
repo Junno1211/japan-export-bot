@@ -1,0 +1,63 @@
+{
+  "department": "BBM 現役 MLB 日本人選手部署",
+  "mercari_keywords": [
+    "BBM 山本由伸 限定",
+    "BBM ルーキーエディション インサート",
+    "BBM 今永昇太"
+  ],
+  "ebay_keywords": [
+    "Yoshinobu Yamamoto BBM Japanese Baseball Card Limited Insert Dodgers",
+    "Yamamoto BBM Rookie Edition Insert Japanese MLB",
+    "Shota Imanaga BBM Japanese Baseball Card Limited MLB",
+    "Masataka Yoshida BBM Japanese Baseball Card Red Sox"
+  ],
+  "ebay_similar_sold_queries": [
+    "Yoshinobu Yamamoto BBM Japanese card Dodgers",
+    "BBM Rookie Edition insert Japanese MLB",
+    "Shota Imanaga BBM Japanese baseball MLB"
+  ],
+  "similar_sold_days_primary": 90,
+  "similar_sold_days": 365,
+  "similar_sold_min_samples": 2,
+  "ng_keywords": [
+    "ポケモン",
+    "ワンピース",
+    "遊戯王",
+    "Pokemon",
+    "One Piece",
+    "大谷翔平",
+    "Ohtani",
+    "Shohei"
+  ],
+  "card_keywords": [
+    "bbm",
+    "山本由伸",
+    "今永",
+    "吉田正尚",
+    "mlb",
+    "限定",
+    "ルーキーエディション",
+    "インサート",
+    "金箔"
+  ],
+  "min_mercari_price": 500,
+  "max_mercari_price": 250000,
+  "min_profit_jpy": 3000,
+  "shipping_cost_jpy": 3000,
+  "exchange_rate_jpy_per_usd": 155,
+  "max_items_per_keyword": 10,
+  "ebay_category_id": "261328",
+  "game_name": "Baseball",
+  "default_item_specifics": {
+    "Sport": "Baseball",
+    "Country/Region of Manufacture": "Japan",
+    "Language": "Japanese"
+  },
+  "pricing_strategy": {
+    "min_usd": 30,
+    "max_usd": 2499,
+    "undercut_pct": 3,
+    "note": "MLB移籍選手BBM限定・タイトルにMLBチーム名必須・$2,499上限厳守"
+  },
+  "ai_prompt_hint": "BBM cards of Japanese players who play in MLB (e.g. Yamamoto, Imanaga, Yoshida). Limited, foil stamp, insert, Rookie Edition holo. Title MUST include the MLB team name. Never use Shohei Ohtani, Pokemon, or One Piece."
+}

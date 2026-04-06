@@ -27,12 +27,12 @@
     "Shohei Ohtani 2015 BBM"
   ],
   "similar_sold_days_primary": 90,
-  "similar_sold_days": 120,
-  "similar_sold_min_samples": 2,
+  "similar_sold_days": 365,
+  "similar_sold_min_samples": 1,
   "ng_keywords": ["ポケモン", "ポケカ", "ピカチュウ", "ワンピース", "ONE PIECE", "遊戯王", "デュエマ"],
   "card_keywords": ["bbm"],
   "min_mercari_price": 1000,
-  "max_mercari_price": 50000,
+  "max_mercari_price": 90000,
   "min_profit_jpy": 6000,
   "max_items_per_keyword": 12,
   "ebay_category_id": "261328",
@@ -47,7 +47,7 @@
     "min_usd": 30,
     "max_usd": 2500,
     "undercut_pct": 3,
-    "note": "BBM大谷のみ・仕入上限¥50,000・期待利益¥6,000+"
+    "note": "BBM大谷のみ・仕入上限¥90,000・期待利益¥6,000+"
   },
   "ai_prompt_hint": "This is a Shohei Ohtani BBM (Japanese baseball card) from Japan. Focus on: BBM year/set, RC status, parallel, autograph. Title must include 'Shohei Ohtani' at the front. Never use Pokemon or One Piece related words."
 }

@@ -601,7 +601,12 @@ def backup_critical_files():
     logger.info(f"💾 バックアップ完了")
 
 
-def run_auto_listing(dry_run: bool = False, max_success: int = None):
+def run_auto_listing(
+    dry_run: bool = False,
+    max_success: int = None,
+    max_priority_success: int = None,
+    max_auto_success: int = None,
+):
     lock_file = open('/tmp/auto_lister.lock', 'w')
     try: fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except: return
@@ -669,6 +674,8 @@ def run_auto_listing(dry_run: bool = False, max_success: int = None):
 
     success_count = 0
     fail_count = 0
+    priority_success_count = 0
+    auto_success_count = 0
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
@@ -676,10 +683,40 @@ def run_auto_listing(dry_run: bool = False, max_success: int = None):
             listing_capped = False
             for s_name in [PRIORITY_SHEET_NAME, AUTO_SHEET_NAME] + AUTO_SHEETS:
                 items = read_active_items(s_name)
-                if not items: continue
+                if not items:
+                    continue
+
+                is_priority_sheet = s_name == PRIORITY_SHEET_NAME
+                if (
+                    not is_priority_sheet
+                    and max_auto_success is not None
+                    and auto_success_count >= max_auto_success
+                ):
+                    logger.info(
+                        f"⏹️ 自動出品は成功{max_auto_success}件に達したため {s_name} をスキップ"
+                    )
+                    continue
 
                 logger.info(f"--- チャンネル開始: {s_name} ({len(items)}件) ---")
                 for item in items:
+                    if is_priority_sheet:
+                        if (
+                            max_priority_success is not None
+                            and priority_success_count >= max_priority_success
+                        ):
+                            logger.info(
+                                f"⏹️ 優先出品は成功{max_priority_success}件に達したため {s_name} の残りをスキップ"
+                            )
+                            break
+                    else:
+                        if (
+                            max_auto_success is not None
+                            and auto_success_count >= max_auto_success
+                        ):
+                            logger.info(
+                                f"⏹️ 自動出品は成功{max_auto_success}件に達したため {s_name} の残りをスキップ"
+                            )
+                            break
                     if max_success is not None and success_count >= max_success:
                         logger.info(f"⏹️ 出品成功 {max_success}件に達したため終了")
                         listing_capped = True
@@ -762,18 +799,22 @@ def run_auto_listing(dry_run: bool = False, max_success: int = None):
                     # 最低$99、最高$2,499
                     price_usd = max(price_usd, 99.0)
                     price_usd = min(price_usd, 2499.0)
-                    # 最終利益・ROI検証
+                    # 最終利益・ROI検証（B列は価格逆算用。最低利益は部署keywordsの min_profit_jpy と共通ルールのみ）
                     final_profit = calc_profit(price_usd, mercari_price)
                     roi = final_profit / mercari_price * 100 if mercari_price > 0 else 0
-                    min_profit_required = max(3000, profit_jpy)
+                    detected_dept = detect_department(scraped["title"], scraped["description"])
+                    min_profit_required = 3000
+                    if detected_dept and detected_dept.get("min_profit_jpy") is not None:
+                        min_profit_required = max(
+                            min_profit_required, int(detected_dept["min_profit_jpy"])
+                        )
                     if mercari_price >= 50000:
                         min_profit_required = max(min_profit_required, 5000)
                     if final_profit < min_profit_required:
                         update_item_status(row_num, f"⚠️ 利益不足 ¥{int(final_profit):,} (要¥{min_profit_required:,}+)", s_name); continue
                     logger.info(f"  💰 出品価格${price_usd} | 利益¥{int(final_profit):,} | ROI{roi:.0f}%")
 
-                    # 部署自動判定（タイトル・説明文から）
-                    detected_dept = detect_department(scraped["title"], scraped["description"])
+                    # 部署自動判定（上で取得済み）
                     ai_data = ai_analyze(scraped["title"], scraped["description"], dept=detected_dept)
                     if not ai_data:
                         update_item_status(row_num, "❌ AI分析失敗", s_name); continue
@@ -851,6 +892,10 @@ def run_auto_listing(dry_run: bool = False, max_success: int = None):
                             logger.error(f"  ⚠️ 在庫登録失敗（手動復旧要）: url={url} item_id={item_id} error={inv_err}")
                         master_urls.add(url)
                         success_count += 1
+                        if is_priority_sheet:
+                            priority_success_count += 1
+                        else:
+                            auto_success_count += 1
                     elif not dry_run:
                         msg = " / ".join(ebay_res.get("errors", []))
                         logger.error(f"  ❌ 出品失敗詳細: {msg}")
@@ -870,6 +915,23 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--max-success", type=int, metavar="N", help="この実行でeBay出品に成功したら打ち切る件数")
+    parser.add_argument("--max-success", type=int, metavar="N", help="この実行でeBay出品に成功したら打ち切る件数（全チャンネル合算）")
+    parser.add_argument(
+        "--max-priority-success",
+        type=int,
+        metavar="N",
+        help="優先出品シートでの出品成功が N 件に達したら優先チャンネルを打ち切り",
+    )
+    parser.add_argument(
+        "--max-auto-success",
+        type=int,
+        metavar="N",
+        help="自動出品系シート（自動出品 + 自動出品_*）での成功合計が N 件に達したら自動チャンネルを打ち切り",
+    )
     args = parser.parse_args()
-    run_auto_listing(dry_run=args.dry_run, max_success=args.max_success)
+    run_auto_listing(
+        dry_run=args.dry_run,
+        max_success=args.max_success,
+        max_priority_success=args.max_priority_success,
+        max_auto_success=args.max_auto_success,
+    )

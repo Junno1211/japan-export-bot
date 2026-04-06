@@ -1,0 +1,58 @@
+{
+  "department": "BBM 相撲部署",
+  "mercari_keywords": [
+    "BBM 相撲 横綱 限定",
+    "BBM 相撲 白鵬",
+    "BBM 相撲 照ノ富士 パラレル",
+    "BBM 相撲 サイン",
+    "BBM グランド相撲 シリアルナンバー"
+  ],
+  "ebay_keywords": [
+    "Hakuho BBM Grand Sumo Limited Card Yokozuna Japanese",
+    "Terunofuji BBM Grand Sumo Parallel Ozeki Japanese",
+    "BBM Grand Sumo autograph signed card Yokozuna Japan",
+    "BBM sumo wrestling serial numbered card Japanese"
+  ],
+  "ebay_similar_sold_queries": [
+    "Hakuho BBM Grand Sumo Yokozuna limited",
+    "Terunofuji BBM Grand Sumo parallel Ozeki",
+    "BBM Grand Sumo serial numbered Yokozuna"
+  ],
+  "similar_sold_days_primary": 90,
+  "similar_sold_days": 365,
+  "similar_sold_min_samples": 2,
+  "ng_keywords": ["ポケモン", "ワンピース", "遊戯王", "Pokemon", "One Piece"],
+  "card_keywords": [
+    "bbm",
+    "相撲",
+    "sumo",
+    "横綱",
+    "白鵬",
+    "照ノ富士",
+    "グランド相撲",
+    "サイン",
+    "シリアル",
+    "パラレル",
+    "なごみ"
+  ],
+  "min_mercari_price": 500,
+  "max_mercari_price": 250000,
+  "min_profit_jpy": 3000,
+  "shipping_cost_jpy": 3000,
+  "exchange_rate_jpy_per_usd": 155,
+  "max_items_per_keyword": 10,
+  "ebay_category_id": "69528",
+  "game_name": "Other Trading Card Games",
+  "default_item_specifics": {
+    "Sport": "Wrestling",
+    "Country/Region of Manufacture": "Japan",
+    "Language": "Japanese"
+  },
+  "pricing_strategy": {
+    "min_usd": 50,
+    "max_usd": 2499,
+    "undercut_pct": 3,
+    "note": "横綱・大関限定/サイン・タイトルにYokozunaまたはOzeki必須・$2,499上限厳守"
+  },
+  "ai_prompt_hint": "BBM Grand Sumo: Yokozuna/Ozeki limited parallels, serial /50 or less, autographs, 2025 Nagomi limited. Title MUST include Yokozuna or Ozeki. Example: Hakuho Sho BBM 2025 Grand Sumo Limited Card #18/50 Yokozuna Rare. Category: wrestling/sumo trading cards. No Pokemon or One Piece."
+}

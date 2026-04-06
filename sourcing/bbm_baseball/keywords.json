@@ -1,0 +1,65 @@
+{
+  "department": "BBM 日本プロ野球カード部署（レジェンド）",
+  "mercari_keywords": [
+    "BBM イチロー 1993",
+    "カルビー イチロー 1994 1995",
+    "BBM 松井秀喜 ルーキー",
+    "カルビー 野球カード 昭和"
+  ],
+  "ebay_keywords": [
+    "Ichiro Suzuki 1993 BBM 239 Japanese Rookie RC Baseball",
+    "Ichiro Suzuki Calbee 1994 1995 Japanese Baseball Card",
+    "Hideki Matsui BBM Japanese Rookie Baseball Card",
+    "Calbee Japanese Baseball Card Showa BBM Era"
+  ],
+  "ebay_similar_sold_queries": [
+    "Ichiro Suzuki 1993 BBM 239 RC Japanese",
+    "Ichiro Suzuki Calbee 1994 Japanese baseball card",
+    "Hideki Matsui BBM rookie Japanese baseball"
+  ],
+  "similar_sold_days_primary": 90,
+  "similar_sold_days": 365,
+  "similar_sold_min_samples": 2,
+  "ng_keywords": [
+    "ポケモン",
+    "ワンピース",
+    "遊戯王",
+    "Pokemon",
+    "One Piece",
+    "大谷翔平",
+    "Ohtani",
+    "Shohei"
+  ],
+  "card_keywords": [
+    "bbm",
+    "カルビー",
+    "calbee",
+    "イチロー",
+    "ichiro",
+    "松井",
+    "matsui",
+    "野球",
+    "ルーキー",
+    "昭和"
+  ],
+  "min_mercari_price": 500,
+  "max_mercari_price": 250000,
+  "min_profit_jpy": 3000,
+  "shipping_cost_jpy": 3000,
+  "exchange_rate_jpy_per_usd": 155,
+  "max_items_per_keyword": 10,
+  "ebay_category_id": "261328",
+  "game_name": "Baseball",
+  "default_item_specifics": {
+    "Sport": "Baseball",
+    "Country/Region of Manufacture": "Japan",
+    "Language": "Japanese"
+  },
+  "pricing_strategy": {
+    "min_usd": 50,
+    "max_usd": 2499,
+    "undercut_pct": 3,
+    "note": "レジェンドBBM/カルビー・$2,499上限厳守"
+  },
+  "ai_prompt_hint": "Japanese legend baseball: Ichiro 1993 BBM #239 RC, Calbee Ichiro 1994–1995, Matsui BBM RC. Title example: Ichiro Suzuki 1993 BBM #239 Japanese Rookie Card RC Baseball. Never use Shohei Ohtani, Pokemon, or One Piece."
+}
