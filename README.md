@@ -3,6 +3,11 @@
 メルカリで仕入れ → eBayで自動出品 → 在庫自動管理のシステムです。
 パソコンを閉じていても24時間自動で動きます。
 
+### 設計・戦略ドキュメント
+
+- [事業モデル刷新仕様書 v1.0](docs/JAPAN_EXPORT_MODEL_REFRESH_v1.md)
+- [Phase 0 チェックリスト](docs/PHASE_0_CHECKLIST.md)（Phase 1 着手前の前提条件）
+
 ---
 
 ## 全体の流れ
@@ -195,10 +200,10 @@ crontab -e
 以下を貼り付けて保存:
 ```
 # 在庫管理（毎時0分）
-0 * * * * cd /opt/bot && /opt/bot/venv/bin/python3 inventory_manager.py >> logs/inventory.log 2>&1
+0 * * * * cd /opt/bot && /opt/bot/venv/bin/python3 -u inventory_manager.py >> logs/inventory.log 2>&1
 
-# 注文監視（5分ごと）
-*/5 * * * * cd /opt/bot && /opt/bot/venv/bin/python3 order_monitor.py >> logs/orders.log 2>&1
+# 注文監視（毎時5分・在庫ジョブと起動をずらす）
+5 * * * * cd /opt/bot && /opt/bot/venv/bin/python3 -u order_monitor.py >> logs/orders.log 2>&1
 
 # 毎朝レポート（8時）
 0 8 * * * cd /opt/bot && /opt/bot/venv/bin/python3 daily_report.py >> logs/daily_report.log 2>&1
@@ -213,7 +218,7 @@ crontab -e
 これでボットが24時間自動で動きます。
 
 - **在庫管理**: 毎時間、メルカリの在庫を自動チェック
-- **注文監視**: 5分ごと、新しい注文をSlackに通知
+- **注文監視**: 毎時5分、新しい注文をSlackに通知（通知は最大約1時間遅れうる）
 - **朝レポート**: 毎朝8時、売上・在庫状況をSlackに送信
 
 ---
@@ -249,7 +254,7 @@ crontab -l
 | `auto_lister.py` | スプレッドシートから自動出品 |
 | `auto_sourcer.py` | メルカリ自動リサーチ |
 | `inventory_manager.py` | 在庫管理（毎時間自動） |
-| `order_monitor.py` | 注文監視（5分ごと） |
+| `order_monitor.py` | 注文監視（毎時5分、cron は `scripts/repair_crontab_project_jobs.py` で整備可） |
 | `daily_report.py` | 毎朝レポート |
 | `mercari_scraper.py` | メルカリ商品情報取得 |
 | `mercari_checker.py` | メルカリ在庫チェック |
@@ -266,3 +271,5 @@ crontab -l
 - `config.py` と `google_credentials.json` には秘密情報が含まれます。**絶対に外部に公開しないでください**
 - eBay Auth Tokenは定期的に期限切れになります。更新はeBay Developer Programで行います
 - VPSの料金は毎月発生します。使わない場合はVPSを停止してください
+- **Mac** はスリープ中は **cron も launchd も原則動きません**（起床後に遅れて走ることがある）。24時間監視は **VPS** か **スリープしない機器** が必要。cron の代わりに launchd を使う場合は `scripts/macos/install_launchd_export_bot.sh`（登録後は cron の同種行を削除して二重実行を避ける）
+- ログのざっとした健全性: `bash scripts/log_health_snapshot.sh` / VPS 疎通: `bash scripts/inventory_health_check.sh`
