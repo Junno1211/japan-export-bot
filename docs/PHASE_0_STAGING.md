@@ -2,9 +2,22 @@
 
 最終更新: 2026-04-21（Cursor エージェントがリポジトリ方針に基づき雛形作成。**純之介が実環境を確認して埋めること。**）
 
+## ステージング環境なしでの段階デプロイ
+
+別 Sandbox / 別シートのステージングは **未構築** のため、本番では **v3 一時停止 → deploy → 手動検証 → heartbeat / v3 の cron 再開 → 1 サイクル監視** の順で進める。
+
+| 項目 | 状態 |
+|------|------|
+| 手順書 | **[PHASE_0_DEPLOY_STAGED.md](./PHASE_0_DEPLOY_STAGED.md)**（Stage A〜G・ロールバック） |
+| 実施日 / 実施者 | **未記入**（Stage G 完了時に記入） |
+| 1 サイクル監視結果 | **未記入**（異常なしで Stage G へ） |
+
+持ち越し項目は **[PHASE_0_DEFERRED.md](./PHASE_0_DEFERRED.md)**。
+
 ## 方針
 
 - ステージングが **未構築** のとき、本番 VPS への直接適用はリスクが高いため、**コードはリポジトリにマージしても** 本番反映は `COPY_PASTE_SETUP.txt` の手順に従い、**検証後に deploy** とする。
+- 上記のとおり、可能な範囲では **[PHASE_0_DEPLOY_STAGED.md](./PHASE_0_DEPLOY_STAGED.md)** の **段階デプロイ** を優先する。
 - ロールバックは **git revert / 旧コミットの deploy** と **VPS `.env` の feature flag** の二本立てを推奨する。
 
 ## 別 eBay アプリ（Sandbox）の有無
