@@ -3,19 +3,21 @@
 auto_lister.py — Phase 14: Profit-Driven Command Cockpit
 【特長】
 1. メルカリURL(A) と 期待利益(B) を読み取り、eBay価格(C)を自動算出
-2. 優先出品（PRIORITY）→ 自動出品（AUTO）の2系統ループ
-3. 00:00 自動クリア（Cockpit CLEAN）
+2. 手動キュー（PRIORITY_SHEET_NAME）→ 自動出品（AUTO）の2系統ループ
+3. 出品成功＋在庫管理表登録後はリサーチ用シートの行を削除（キューに残さない）
+4. 00:00 自動クリア（Cockpit CLEAN・出品済み残骸の掃除）
 """
 
 import sys
 import json
 import logging
+import re
 import time
 import requests
 import xml.etree.ElementTree as ET
 import fcntl
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict
 import google.generativeai as genai
 from playwright.sync_api import sync_playwright
 
@@ -24,15 +26,24 @@ from config import (
     EBAY_APP_ID, EBAY_DEV_ID, EBAY_CERT_ID, EBAY_AUTH_TOKEN, EBAY_SITE_ID, EBAY_ENV,
     PRIORITY_SHEET_NAME, AUTO_SHEET_NAME, AUTO_SHEETS,
     EXCHANGE_RATE, SHIPPING_COST_JPY,
-    SHIPPING_POLICY_MAP, SHIPPING_POLICY_DEFAULT,
-    SLACK_WEBHOOK_URL
+    SLACK_WEBHOOK_URL,
+    MIN_MERCARI_PURCHASE_JPY,
+    AUTO_MAX_MERCARI_PURCHASE_JPY,
+    PRIORITY_MAX_MERCARI_PURCHASE_JPY,
+    MANUAL_LISTING_SKIP_PRICE_USD_GTE,
+    MERCARI_SCRAPE_MAX_RETRIES,
+    MERCARI_SCRAPE_RETRY_BASE_SEC,
 )
 from sheets_manager import (
-    _get_service, read_all_items, read_active_items, 
-    update_item_status, append_item_to_inventory, 
-    create_sheet_if_not_exists, clear_sheet_v2
+    _get_service, read_all_items, read_active_items,
+    update_item_status, append_item_to_inventory,
+    create_sheet_if_not_exists, clear_sheet_v2,
+    _a1_range,
 )
-from mercari_scraper import scrape_mercari_item
+from mercari_scraper import MercariPipelineStopped, scrape_mercari_item
+from ebay_updater import EbayTradingRateLimited, get_item_status, trading_post
+from mercari_proxy import playwright_launch_kwargs
+from shipping_policy_select import select_shipping_policy, ShippingBandMismatchError
 from ebay_lister import add_item, upload_picture_bytes
 from heartbeat import update_heartbeat
 from circuit_breaker import gemini_breaker, ebay_breaker, mercari_breaker
@@ -55,6 +66,30 @@ EBAY_ENDPOINT = {
 }.get(EBAY_ENV, "https://api.ebay.com/ws/api.dll")
 
 VALID_CATEGORIES = {"183454", "183455", "261328", "69528", "31387", "1345"}
+
+# eBay トレカ単品系: ConditionID 3000(Used) は使えない（4000 アングレ / 2750 グレードのみ）
+EBAY_CARD_SINGLE_CATEGORY_IDS = frozenset({"183454", "261328", "183050"})
+# API 用 Card Condition 記述子は固定（eBay 拒否・切り替え失敗を減らす）。実物の状態は説明文で伝える。
+EBAY_CARD_UNGRADED_DESCRIPTOR_VALUE = "400010"
+
+# 説明文 Shipping 用（URL・ドル額は書かない）。Gemini プロンプトと improper フォールバックで揃える
+LISTING_SHIPPING_NOTE_HTML = (
+    "<h2>Shipping</h2><p>Ships from Japan within <strong>10 business days</strong> of cleared payment. "
+    "Shipped via <strong>FedEx</strong> with <strong>tracking</strong>—the tracking number is added on eBay when the label is created. "
+    "International shipping may be billed through eBay’s program (e.g. SpeedPAK) for customs handling; the amount at checkout reflects your address.</p>"
+)
+
+
+def _ebay_sku_from_mercari_url(mercari_url: str) -> str:
+    """
+    eBay SKU は最大 50 文字。URL 全体が長い場合は /item/m… の商品 ID のみを使う。
+    在庫管理は inventory_manager._mercari_url_from_sku が m+数字から URL を復元する。
+    """
+    u = (mercari_url or "").strip()
+    m = re.search(r"/item/(m\d+)", u, re.I)
+    if m:
+        return m.group(1)[:50]
+    return u[:50] if len(u) > 50 else u
 
 
 def notify_slack(text: str) -> None:
@@ -124,20 +159,6 @@ def calculate_listing_price(mercari_jpy: int, expected_profit_jpy: int) -> float
     return max(price, 99.0)  # 最低販売価格 $99
 
 
-def get_shipping_policy_id(item_price_usd: float) -> str:
-    """商品価格($)に対応するeBayシッピングポリシーIDを返す"""
-    if item_price_usd < 100:
-        bracket = 0
-    else:
-        bracket = int((item_price_usd - 100) // 50) * 50 + 100
-    # マップにあれば返す。なければ最も近い下のブラケットを探す
-    if bracket in SHIPPING_POLICY_MAP:
-        return SHIPPING_POLICY_MAP[bracket]
-    lower_brackets = [k for k in SHIPPING_POLICY_MAP if k <= bracket]
-    if lower_brackets:
-        return SHIPPING_POLICY_MAP[max(lower_brackets)]
-    return SHIPPING_POLICY_DEFAULT
-
 def detect_department(title: str, desc: str = "") -> Optional[dict]:
     """商品タイトル・説明文から該当する部署設定を自動判定する（最多マッチ部署を選択）"""
     import os as _os
@@ -159,6 +180,10 @@ def detect_department(title: str, desc: str = "") -> Optional[dict]:
             ng_kw = [w.lower() for w in dept.get("ng_keywords", [])]
             if any(ng in text for ng in ng_kw):
                 continue
+            # 部署専用: いずれかがテキストに無いと選ばない（BBM/PSA 等の汎用語だけで大谷部署に誤マッチしない）
+            require_any = [w.lower() for w in dept.get("require_any") or []]
+            if require_any and not any(r in text for r in require_any):
+                continue
             score = sum(1 for kw in card_kw if kw in text)
             if score > best_score:
                 best_score = score
@@ -168,8 +193,100 @@ def detect_department(title: str, desc: str = "") -> Optional[dict]:
     return best_dept
 
 
-def ai_analyze(title_ja: str, desc_ja: str, dept: Optional[dict] = None) -> dict:
+# Gemini 出品文（プロンプト本体。部署の ai_prompt_hint / ebay_keywords が USER CONTENT に追記される）
+_LISTING_AI_QUALITY_RULES = """
+## ROLE
+You are an expert eBay listing copywriter for Japanese collectibles and hobby items sold to US and international buyers. You optimize for eBay search (Cassini) and buyer trust, without inventing facts.
+
+## OBJECTIVES (in order)
+1) **Search**: Title and item_specifics help the right buyers find the listing (keywords they actually type).
+2) **Accuracy**: Only facts supported by the Japanese source text (or the given Mercari condition line).
+3) **Compliance**: eBay policies and no prohibited claims.
+
+## USER CONTENT
+Below you will receive a block labeled PRODUCT (Japanese title + description), optional Mercari condition, and optional SPECIALIST CONTEXT from our category rules. Treat PRODUCT as the only source of product facts unless SPECIALIST CONTEXT clarifies standard terminology.
+
+## TITLE — search & demand (JSON field "title")
+- Max **80 characters**. Use **natural US English**; **no keyword stuffing**, no repeated phrases, no ALL CAPS.
+- **Front-load** the first ~35–40 characters with the strongest query terms: **what the item is** (character / player / franchise), **product type** (e.g. card, figure), **set or year** if in source, **Japanese / Japan** when the listing is Japan-market (true from source).
+- If graded in source (PSA, BGS, etc.), include that **exactly as stated** (e.g. "PSA 10").
+- **End the title** with a **short honest condition tag in square brackets** (no space before `[`). Choose tags that match the Mercari label when given, e.g. `[New]`, `[NM]`, `[LP]`, `[Good]`, `[READ]`, `[Acceptable]`. Tags are for **expectation alignment**, not hype.
+- **Do not** put prices, shipping costs, "free shipping", phone, email, or URLs in the title.
+- Follow SPECIALIST CONTEXT for must-use names (e.g. correct player/character). If NICHE SEARCH PHRASES appear, align the title with **1–3 phrases that truly match** the source—do not add unrelated popular terms.
+
+## DESCRIPTION — clarity (JSON field "description_html")
+- Help buyers **confirm** the item (set, number, language of card text if stated). Do **not** invent rarity, investment value, or guaranteed resale. Do not claim scarcity unless the Japanese text supports it with specifics.
+
+## PRICING
+- **Never** state dollar amounts, discounts, "best price", or fee details in title or description (eBay shows price separately).
+
+## FACTS
+- Extract **all verifiable** facts (names, numbers, years, sets, grades, serials, quantities, accessories) into English. If the Japanese text is thin, keep the description shorter.
+- **Never** invent rarity, provenance, grades, or authenticity. Player/character: use **only** names clearly supported by the Japanese text. If unsure, use set/team/year without inventing a person.
+
+## EBAY POLICY (critical)
+- No external URLs, links, http(s), www., email, phone, social handles, or competitor marketplace names in the description.
+- No medical/health claims, investment advice, or guaranteed future value.
+- Avoid absolute authenticity guarantees; for grading, prefer neutral wording ("Graded PSA 10") when the source shows it.
+
+## VOICE
+- Professional, clear US English. Prefer concrete nouns over vague hype.
+
+## CONDITION INTEGRITY (critical — reduces Item Not As Described)
+When a Mercari condition label is provided, it is **authoritative** for how "nice" the item may sound overall.
+- If the label is **傷や汚れあり**, **やや傷や汚れあり**, **全体的に状態が悪い**, or similar: you **must not** use **Like New**, **Mint**, **Near Mint**, **Gem Mint**, **NM**, **MINT**, or any wording that implies flawless or shelf-fresh condition. Describe **wear, scratches, stains, edge wear, clouding, dents, fading, or play wear** using plain English (you may use words **Scratch**, **Stain**, **Wear** where they apply). Put the **worst, most buyer-relevant defects first** in the Condition section so they cannot be missed.
+- Align narrative with eBay-style used tiers **in prose only** (do not paste policy URLs): **Used - Good** = noticeable wear or marks but still functional / intact for the hobby; **Used - Acceptable** = heavy wear or obvious damage—still describe factually from the label and photos, do not invent damage beyond the label.
+- If the label is stronger (e.g. 新品・未使用, 未使用に近い, 目立った傷や汚れなし), stay proportional—do not invent flaws, and do not oversell beyond the label.
+- **PSA/BGS/CGC graded slabs**: condition language follows the grade/slab; do not contradict the slab with "Near Mint" raw-card hype unless the source clearly describes slab/case damage.
+
+## DESCRIPTION_HTML — structure (use <h2> in this order; omit only if there is truly no content for that block)
+1) <h2>Condition</h2> — **First body section.** Plain English tied to the Mercari label. Use a **<ul>** of concrete defect categories that apply (e.g. <li>Scratches: …</li>, <li>Stains: …</li>, <li>Wear: …</li>) or state clearly if the label indicates only light wear. If no Mercari label was given, say so and tell the buyer to rely on photos. Do not bury negatives in the last sentence.
+2) <h2>✨ Product Highlights</h2> — <p> or short <ul>: rarity, set, character, gameplay/collectibility **only from the Japanese text**. Do **not** claim the item "looks mint" or "presents as new" unless the Mercari label supports it.
+3) <h2>✅ Item Details</h2> — <ul><li>…</li></ul> for hard facts (year, edition, language, card #, parallel, quantity, accessories). Include a subheading inside this section: <h3>Appearance</h3> then <p>…</p> repeating or expanding **surface condition** (scratches, gloss loss, corner whitening, print lines, box crush, yellowing) so it is easy to find. Facts only from source text + Mercari label.
+4) <h2>⚠️ Important</h2> — <p> stating this is a **pre-owned** (or new-in-box, if label says new) item sold as pictured, and that the buyer should **examine every photo** including crops before purchase. No fear-mongering; be factual.
+5) <h2>What's Included</h2> — single vs set, accessories as implied by source (omit if fully obvious from title).
+6) <h2>Shipping</h2> — one <p> including **all** of: (a) ships from Japan; (b) ships within <strong>10 business days</strong> of cleared payment; (c) <strong>FedEx</strong> with <strong>tracking</strong>, tracking uploaded on eBay when shipped; (d) one sentence that international shipping may be higher due to eBay cross-border programs (no dollar amounts, no URLs); (e) no guaranteed delivery date to door; (f) no http(s) or tracking links in the description.
+
+## HTML rules
+- Allowed: h2, h3, p, ul, li, strong, em, br (sparingly). No <a>, <img>, style, script, table.
+- Do not paste raw Japanese; translate or omit.
+
+## category_id and item_specifics
+- "category_id": valid eBay category id string for the product type when known; use SPECIALIST preferred category if provided and consistent with the item.
+- "item_specifics": object of eBay item specifics. Prefer **filter-friendly** fields buyers use (Year, Brand, Character, Card Number, etc.) **only when supported by the source**. Omit or leave empty when unknown—**do not guess**.
+
+## OUTPUT
+Return **only** valid JSON with keys: "title", "description_html", "category_id", "item_specifics" (object).
+"""
+
+
+def _cdata_safe(text: str, max_len: int = 980) -> str:
+    s = (text or "").replace("]]>", "]] >")
+    return s[:max_len]
+
+
+def map_booster_box_condition_id(condition_ja: str) -> str:
+    """183455 等: 新品表記のみ New(1000)、それ以外は Used(3000)。"""
+    t = (condition_ja or "").strip()
+    if not t:
+        return "3000"
+    if "未使用に近い" in t or "目立った" in t or "やや傷" in t or "傷や汚れ" in t or "全体的" in t:
+        return "3000"
+    if "新品" in t or "未使用" in t:
+        return "1000"
+    return "3000"
+
+
+def ai_analyze(
+    title_ja: str,
+    desc_ja: str,
+    dept: Optional[dict] = None,
+    condition_ja: str = "",
+) -> dict:
     """Geminiを使用してタイトルと説明文をSEO最適化する（部署特化プロンプト対応）"""
+    title_ja = (title_ja or "")[:4000]
+    desc_ja = (desc_ja or "")[:12000]
+
     # 部署が未指定なら自動判定
     if dept is None:
         dept = detect_department(title_ja, desc_ja)
@@ -177,34 +294,47 @@ def ai_analyze(title_ja: str, desc_ja: str, dept: Optional[dict] = None) -> dict
     # 部署特化のヒント
     dept_hint = ""
     if dept:
-        dept_hint = f"\n\nSPECIALIST CONTEXT: {dept.get('ai_prompt_hint', '')}"
+        aph = dept.get("ai_prompt_hint") or ""
+        if aph.strip():
+            dept_hint = f"\n\nSPECIALIST CONTEXT (follow strictly for terminology and must-mention facts):\n{aph}"
         if dept.get("default_item_specifics"):
             dept_hint += f"\nDefault item_specifics to include: {json.dumps(dept['default_item_specifics'])}"
         if dept.get("ebay_category_id"):
             dept_hint += f"\nPreferred category_id: {dept['ebay_category_id']}"
+        ekw = dept.get("ebay_keywords") or []
+        if isinstance(ekw, list) and ekw:
+            flat = [str(x).strip() for x in ekw[:16] if str(x).strip()]
+            if flat:
+                dept_hint += (
+                    "\nNICHE SEARCH PHRASES (eBay US; weave 1–3 into the title only when they match the source):\n"
+                    + ", ".join(flat)
+                )
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    cond_hint = ""
+    if (condition_ja or "").strip():
+        cond_hint = (
+            f"\nMercari seller-stated condition label (authoritative; align title tag + Condition + Appearance; "
+            f"never oversell vs this label):\n{condition_ja.strip()}\n"
+        )
+    user_block = (
+        "--- USER CONTENT ---\n"
+        f"PRODUCT (Japanese source text)\nTitle:\n{title_ja}\n\nDescription:\n{desc_ja}\n"
+        + cond_hint
+        + dept_hint
+    )
     payload = {
         "contents": [{
             "parts": [{
-                "text": (
-                    "You are an eBay listing SEO expert for Japanese collectibles.\n"
-                    "Given this Japanese product info, create an optimized English eBay listing.\n"
-                    "CRITICAL: Never include any external URLs, website addresses, or hyperlinks in the description. No http/https links, no brand websites, no reference pages. eBay prohibits all external links.\n"
-                    f"Title: {title_ja}\nDescription: {desc_ja}\n\n"
-                    "Return ONLY valid JSON with these keys:\n"
-                    '- "title": English SEO title (max 80 chars, keywords front-loaded)\n'
-                    '- "description_html": HTML product description (NO external URLs/links)\n'
-                    '- "category_id": eBay category ID (e.g. "183454" for CCG cards)\n'
-                    '- "item_specifics": object with relevant eBay item specifics\n'
-                    + dept_hint
-                )
+                "text": _LISTING_AI_QUALITY_RULES.strip() + "\n\n" + user_block
             }]
         }],
         "generationConfig": {
             "responseMimeType": "application/json",
-            "temperature": 0.2
-        }
+            "temperature": 0.15,
+            "topP": 0.85,
+            "maxOutputTokens": 8192,
+        },
     }
 
     if not gemini_breaker.can_proceed():
@@ -213,15 +343,17 @@ def ai_analyze(title_ja: str, desc_ja: str, dept: Optional[dict] = None) -> dict
 
     for attempt in range(3):
         try:
-            resp = requests.post(url, json=payload, timeout=30)
+            resp = requests.post(url, json=payload, timeout=90)
             if resp.status_code == 200:
                 data = resp.json()
                 text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
                 result = json.loads(text)
                 gemini_breaker.record_success()
-                return sanitize_ai_output(result)
+                return sanitize_ai_output(result, (condition_ja or "").strip())
             elif resp.status_code == 429:
-                logger.warning(f"AI Rate Limit (Attempt {attempt+1}/3). Waiting...")
+                logger.warning(
+                    f"[Gemini] HTTP 429 Rate Limit (Attempt {attempt+1}/3). Waiting..."
+                )
                 gemini_breaker.record_failure()
                 time.sleep(15 * (attempt + 1))
                 continue
@@ -252,22 +384,131 @@ EBAY_DESC_BANNED_WORDS = [
     "best price", "lowest price", "cheap", "discount", "sale", "clearance",
     "contact me", "email me", "call me", "whatsapp", "telegram", "line",
     "paypal", "venmo", "zelle", "cash app", "wire transfer", "western union",
+    "investment opportunity", "great investment", "rare investment",
+    "miracle", "cure", "treats disease", "fda approved",
 ]
 
+# eBay が「improper words」になりやすい絵文字・記号を除去（タイトル・説明・Specifics 値）
+_EMOJI_AND_SYMBOL_RE = re.compile(
+    r"[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E0-\U0001F1FF"
+    r"\U0000FE00-\U0000FE0F\U0000200D]+",
+    flags=re.UNICODE,
+)
 
-def sanitize_ai_output(ai_data: dict) -> dict:
+
+# 説明のセクション見出し用（本文の絵文字は除去対象だが、これらは残す）
+_EMOJI_PROTECT_SEQ = (
+    ("\u26a0\ufe0f", "__EBAYSEC_WARN__"),
+    ("\u26a0", "__EBAYSEC_WARN__"),
+    ("\u2705", "__EBAYSEC_OK__"),
+    ("\u2728", "__EBAYSEC_HI__"),
+)
+
+
+def strip_listing_emoji(text: str) -> str:
+    if not text:
+        return ""
+    s = str(text)
+    for orig, token in _EMOJI_PROTECT_SEQ:
+        s = s.replace(orig, token)
+    s = _EMOJI_AND_SYMBOL_RE.sub("", s).strip()
+    for orig, token in _EMOJI_PROTECT_SEQ:
+        s = s.replace(token, orig)
+    return s
+
+
+def _mercari_label_implies_significant_wear(condition_ja: str) -> bool:
+    """メルカリ中古〜難あり帯。過大な美品表現をタイトル・説明から落とすトリガ。"""
+    t = (condition_ja or "").strip()
+    if not t:
+        return False
+    if "やや傷" in t:
+        return True
+    if "傷や汚れあり" in t:
+        return True
+    if "ジャンク" in t:
+        return True
+    if "全体的" in t and ("悪" in t or "悪い" in t):
+        return True
+    if "状態が悪" in t or "状態の悪" in t:
+        return True
+    return False
+
+
+def _scrub_overpositive_condition_copy(text: str, condition_ja: str) -> str:
+    """傷あり系ラベル時、Like New / Near Mint 等が混入したモデル出力を弱める（/slab表記がある場合は Gem Mint 等は残す）。"""
+    if not _mercari_label_implies_significant_wear(condition_ja):
+        return (text or "").strip()
+    s = str(text or "")
+    slab = bool(re.search(r"\b(PSA|BGS|CGC|SGC)\s*\d", s, re.I))
+    patterns = [
+        r"\bLike[-\s]?New\b",
+        r"\bNear\s*Mint\b",
+        r"\bMint\s+Condition\b",
+        r"\bExcellent\s+Condition\b",
+        r"\bEUC\b",
+    ]
+    if not slab:
+        patterns.extend([r"\bGem\s*Mint\b", r"\bMint\b"])
+    for pat in patterns:
+        s = re.sub(pat, "", s, flags=re.IGNORECASE)
+    s = re.sub(r"[ \t]{2,}", " ", s)
+    s = re.sub(r"\s{2,}", " ", s)
+    return s.strip()
+
+
+def scrub_ebay_fragment(text: str) -> str:
+    """Item Specifics 等の短文から禁止語を除去"""
+    s = str(text or "")
+    for banned in EBAY_DESC_BANNED_WORDS:
+        s = re.sub(r"(?i)\b" + re.escape(banned) + r"\b", "", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def sanitize_item_specifics_values(specs: dict) -> dict:
+    """eBay Item Specifics の各値から禁止語・絵文字を除去（improper words 対策）"""
+    if not specs:
+        return {}
+    out = {}
+    for k, v in specs.items():
+        if isinstance(v, list):
+            out[k] = [scrub_ebay_fragment(strip_listing_emoji(x)) for x in v if str(x).strip()]
+        else:
+            out[k] = scrub_ebay_fragment(strip_listing_emoji(v))
+    return out
+
+
+def latinish_title_fallback(title: str, max_len: int = 80) -> str:
+    """improper 再試行用: 記号を減らし英数字中心に（空なら固定文言）"""
+    t = strip_listing_emoji(title or "")
+    for banned in EBAY_TITLE_BANNED_WORDS:
+        t = re.sub(r"\b" + banned + r"\b", "", t, flags=re.IGNORECASE)
+    buf = []
+    for c in t:
+        if ord(c) < 128 and (c.isalnum() or c in " -/.,()#&+'"):
+            buf.append(c)
+        elif c in "\n\t":
+            buf.append(" ")
+        elif c.isalnum():
+            buf.append(c)
+    s = re.sub(r"\s+", " ", "".join(buf)).strip()[:max_len]
+    return s if s else "Japanese Collectible Card"
+
+
+def sanitize_ai_output(ai_data: dict, condition_ja: str = "") -> dict:
     """Gemini AI出力をeBayポリシー準拠にサニタイズする"""
     import re as _re
 
-    # 1. タイトル: 禁止ワード除去 & 80文字制限
-    title = ai_data.get("title", "")
+    # 1. タイトル: 絵文字・禁止ワード除去 & 80文字制限
+    title = strip_listing_emoji(ai_data.get("title", ""))
+    title = _scrub_overpositive_condition_copy(title, condition_ja)
     for banned in EBAY_TITLE_BANNED_WORDS:
         title = _re.sub(r'\b' + banned + r'\b', '', title, flags=_re.IGNORECASE)
     title = _re.sub(r'\s+', ' ', title).strip()[:80]
     ai_data["title"] = title
 
     # 2. 商品説明: 危険なHTML・外部URL・禁止ワードを完全除去
-    desc = ai_data.get("description_html", "")
+    desc = strip_listing_emoji(ai_data.get("description_html", ""))
     # 危険なHTMLタグを完全除去（script, iframe, form, style, object, embed, applet）
     desc = _re.sub(r'<(script|iframe|form|style|object|embed|applet|link|meta)\b[^>]*>.*?</\1>', '', desc, flags=_re.IGNORECASE | _re.DOTALL)
     desc = _re.sub(r'<(script|iframe|form|style|object|embed|applet|link|meta|input|button)\b[^>]*/?\s*>', '', desc, flags=_re.IGNORECASE)
@@ -283,16 +524,23 @@ def sanitize_ai_output(ai_data: dict) -> dict:
     # 禁止ワード除去
     for banned in EBAY_DESC_BANNED_WORDS:
         desc = _re.sub(r'(?i)\b' + _re.escape(banned) + r'\b', '', desc)
+    # 空のリスト項目・空段落を整理（読みやすさ）
+    desc = _re.sub(r"<li>\s*</li>", "", desc, flags=_re.IGNORECASE)
+    desc = _re.sub(r"<p>\s*</p>", "", desc, flags=_re.IGNORECASE)
+    desc = _re.sub(r"(<br\s*/?>)\s*(</?(?:h2|h3|ul|p)\b)", r"\2", desc, flags=_re.IGNORECASE)
+    # 感嘆符の連打を弱める
+    desc = _re.sub(r"!{2,}", "!", desc)
     # 連続空白・改行の整理
     desc = _re.sub(r'\n{3,}', '\n\n', desc)
     desc = _re.sub(r'  +', ' ', desc)
+    desc = _scrub_overpositive_condition_copy(desc, condition_ja)
     ai_data["description_html"] = desc.strip()
 
-    # 3. Item Specifics: Condition系除去（XMLで指定するため二重指定防止）
+    # 3. Item Specifics: Condition系除去 + 値の禁止語・絵文字除去
     specs = ai_data.get("item_specifics", {})
     for drop in ["Condition", "condition", "Card Condition"]:
         specs.pop(drop, None)
-    ai_data["item_specifics"] = specs
+    ai_data["item_specifics"] = sanitize_item_specifics_values(specs)
 
     return ai_data
 
@@ -310,12 +558,18 @@ def add_item_to_ebay(**kwargs) -> dict:
     title = kwargs.get("title", "")[:80]
     desc = kwargs.get("desc_html", "")
     price = kwargs.get("price_usd", 0)
-    cat_id = kwargs.get("category_id", "183454")
+    cat_id = str(kwargs.get("category_id", "183454")).strip()
     if cat_id not in VALID_CATEGORIES:
         cat_id = "183454"  # デフォルト: CCG Individual Cards
-    policy_id = kwargs.get("shipping_policy_id", SHIPPING_POLICY_DEFAULT)
+    sel = select_shipping_policy(float(price))
+    policy_id = sel.policy_id
+    if kwargs.get("shipping_policy_id") not in (None, "", policy_id):
+        raise ShippingBandMismatchError(
+            f"shipping_policy_id は指定禁止（select_shipping_policy のみ）。"
+            f" got={kwargs.get('shipping_policy_id')!r} expected={policy_id!r} price=${price}"
+        )
     pics = "".join([f"<PictureURL>{u}</PictureURL>" for u in kwargs.get("image_urls", [])])
-    specs = kwargs.get("item_specifics", {})
+    specs = sanitize_item_specifics_values(kwargs.get("item_specifics") or {})
     # CCGカード系カテゴリは "Game" 必須 — 部署データがあればそちらを優先
     if cat_id in ("183454", "183455", "261328") and "Game" not in specs:
         dept = kwargs.get("dept")
@@ -388,41 +642,59 @@ def add_item_to_ebay(**kwargs) -> dict:
         specs_xml_parts.append(f"<NameValueList><Name><![CDATA[{k}]]></Name>{value_xml}</NameValueList>")
 
     specs_xml = "".join(specs_xml_parts)
-    # Condition設定（カテゴリ別）
+    mercari_condition_ja = (kwargs.get("mercari_condition_ja") or "").strip()
+    # Condition設定（カテゴリ別）— メルカリ「商品の状態」に追従
     condition_desc_xml = ""
+    condition_description_xml = ""
+    _cid = cat_id
     force_cond = kwargs.get("_force_condition")
-    if force_cond:
-        condition_id = force_cond
-    elif cat_id in ("183454", "261328"):
+    # トレカ単品系は 4000+記述子を最優先（if force_cond より先。リトライの 3000 で上書きされないようにする）
+    if _cid in EBAY_CARD_SINGLE_CATEGORY_IDS:
+        kwargs.pop("_force_condition", None)
         condition_id = "4000"
-        condition_desc_xml = """
+        cd_val = EBAY_CARD_UNGRADED_DESCRIPTOR_VALUE
+        condition_desc_xml = f"""
     <ConditionDescriptors>
       <ConditionDescriptor>
         <Name>40001</Name>
-        <Value>400010</Value>
+        <Value>{cd_val}</Value>
       </ConditionDescriptor>
     </ConditionDescriptors>"""
-    elif cat_id == "183455":
-        condition_id = "1000"
+        logger.info(
+            "  📋 eBay card: 4000 + descriptor %s（詳細は説明文・Mercari: %s）",
+            cd_val,
+            mercari_condition_ja or "—",
+        )
+    elif force_cond:
+        condition_id = str(force_cond).strip()
+    elif _cid == "183455":
+        condition_id = map_booster_box_condition_id(mercari_condition_ja)
+        if condition_id == "3000" and mercari_condition_ja:
+            condition_description_xml = f"""
+    <ConditionDescription><![CDATA[{_cdata_safe("Source condition label: " + mercari_condition_ja)}]]></ConditionDescription>"""
     else:
         condition_id = "3000"
+        if mercari_condition_ja:
+            condition_description_xml = f"""
+    <ConditionDescription><![CDATA[{_cdata_safe("Source condition label: " + mercari_condition_ja)}]]></ConditionDescription>"""
     xml = f"""<?xml version="1.0" encoding="utf-8"?>
 <AddFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <RequesterCredentials><eBayAuthToken>{EBAY_AUTH_TOKEN}</eBayAuthToken></RequesterCredentials>
   <Item>
     <Title><![CDATA[{title}]]></Title>
     <Description><![CDATA[{desc}]]></Description>
-    <PrimaryCategory><CategoryID>{cat_id}</CategoryID></PrimaryCategory>
+    <PrimaryCategory><CategoryID>{_cid}</CategoryID></PrimaryCategory>
     <StartPrice currencyID="USD">{price}</StartPrice>
-    <ConditionID>{condition_id}</ConditionID>{condition_desc_xml}
+    <ConditionID>{condition_id}</ConditionID>{condition_desc_xml}{condition_description_xml}
     <Country>JP</Country>
     <Location>Japan</Location>
     <Currency>USD</Currency>
+    <DispatchTimeMax>10</DispatchTimeMax>
     <ListingDuration>GTC</ListingDuration>
     <ListingType>FixedPriceItem</ListingType>
     <Quantity>1</Quantity>
     <OutOfStockControl>true</OutOfStockControl>
-    <SKU><![CDATA[{kwargs.get("mercari_url", "")}]]></SKU>
+    <SKU><![CDATA[{_ebay_sku_from_mercari_url(kwargs.get("mercari_url", ""))}]]></SKU>
     <ItemSpecifics>{specs_xml}</ItemSpecifics>
     <PictureDetails>{pics}</PictureDetails>
     <SellerProfiles>
@@ -443,44 +715,170 @@ def add_item_to_ebay(**kwargs) -> dict:
         return {"success": False, "errors": ["eBay circuit breaker OPEN"]}
 
     try:
-        resp = requests.post(EBAY_ENDPOINT, headers=headers, data=xml.encode("utf-8"), timeout=30)
+        resp = trading_post(
+            EBAY_ENDPOINT,
+            headers,
+            xml.encode("utf-8"),
+            "AddFixedPriceItem",
+            timeout=30,
+        )
         root = ET.fromstring(resp.text)
         ns = {"ns": "urn:ebay:apis:eBLBaseComponents"}
-        ack = root.find("ns:Ack", ns).text
+        ack_el = root.find("ns:Ack", ns)
+        ack = ack_el.text if ack_el is not None else ""
         item_id_node = root.find(".//ns:ItemID", ns)
-        # ItemIDが返っていれば出品成功（Warning付きでも）
-        if item_id_node is not None and item_id_node.text:
+        # Phase0: Ack + ItemID + GetItem で二系統一致したときのみ成功
+        if item_id_node is not None and item_id_node.text and ack in ("Success", "Warning"):
+            iid = (item_id_node.text or "").strip()
+            gi = get_item_status(iid)
+            if not gi.get("success"):
+                time.sleep(2.0)
+                gi = get_item_status(iid)
+            if not gi.get("success"):
+                logger.error(
+                    "  [eBay Trading] Phase0: AddFixedPriceItem は ItemID を返したが GetItem 失敗 — 成功扱いしない"
+                )
+                ebay_breaker.record_failure()
+                return {"success": False, "errors": ["get_item_confirm_failed"]}
             ebay_breaker.record_success()
-            return {"success": True, "item_id": item_id_node.text}
+            return {"success": True, "item_id": iid}
         if ack in ("Success", "Warning"):
-            ebay_breaker.record_success()
-            return {"success": True, "item_id": item_id_node.text if item_id_node is not None else ""}
+            logger.error(
+                "  [eBay Trading] Phase0: Ack は成功だが ItemID 欠落 — 成功扱いしない"
+            )
+            ebay_breaker.record_failure()
+            return {"success": False, "errors": ["missing_item_id_after_success_ack"]}
         errs = [e.text for e in root.findall(".//ns:LongMessage", ns)]
         errs_lower = " ".join(e.lower() for e in errs)
         logger.warning(f"  ❌ 出品失敗詳細: {' / '.join(errs)}")
+
+        # improper words は Item Specifics 緩和より先に処理（文言・Specifics 値の両方が原因になり得る）
+        if "improper" in errs_lower:
+            scrub = int(kwargs.get("_ebay_improper_scrub", 0) or 0)
+            if scrub < 3:
+                kwargs["_ebay_improper_scrub"] = scrub + 1
+                if scrub == 0:
+                    t = strip_listing_emoji(kwargs.get("title", ""))
+                    for banned in EBAY_TITLE_BANNED_WORDS:
+                        t = re.sub(r"\b" + banned + r"\b", "", t, flags=re.IGNORECASE)
+                    t = re.sub(r"\s+", " ", t).strip()[:80]
+                    kwargs["title"] = t if t else "Japanese Collectible Card"
+                    d = kwargs.get("desc_html", "")
+                    d = strip_listing_emoji(d)
+                    for banned in EBAY_DESC_BANNED_WORDS:
+                        d = re.sub(r"(?i)\b" + re.escape(banned) + r"\b", "", d)
+                    kwargs["desc_html"] = re.sub(r"\s+", " ", d).strip() or (
+                        "<h2>Overview</h2><p>Japanese collectible item. See photos for details.</p>"
+                        + LISTING_SHIPPING_NOTE_HTML
+                    )
+                    kwargs["item_specifics"] = sanitize_item_specifics_values(
+                        kwargs.get("item_specifics") or {}
+                    )
+                elif scrub == 1:
+                    kwargs["title"] = latinish_title_fallback(kwargs.get("title", ""))
+                    kwargs["desc_html"] = (
+                        "<h2>Overview</h2><p>Japanese trading card product. See photos.</p>"
+                        "<h2>Condition</h2><p>See listing photos.</p>"
+                        + LISTING_SHIPPING_NOTE_HTML
+                    )
+                    sp = kwargs.get("item_specifics") or {}
+                    kwargs["item_specifics"] = sanitize_item_specifics_values(
+                        {
+                            k: sp[k]
+                            for k in (
+                                "Game",
+                                "Sport",
+                                "Country/Region of Manufacture",
+                                "Language",
+                                "Card Name",
+                            )
+                            if k in sp
+                        }
+                    )
+                    kwargs["item_specifics"].setdefault("Country/Region of Manufacture", "Japan")
+                    kwargs["item_specifics"].setdefault("Language", "Japanese")
+                else:
+                    _prev_sp = dict(kwargs.get("item_specifics") or {})
+                    _game = _prev_sp.get("Game")
+                    kwargs["title"] = "Japanese Trading Card Collectible"
+                    kwargs["desc_html"] = (
+                        "<p>Japanese collectible. Photos show the item. "
+                        "Ships from Japan within 10 business days via FedEx with tracking on eBay. "
+                        "International shipping rate at checkout may include eBay program handling.</p>"
+                    )
+                    kwargs["item_specifics"] = {
+                        "Country/Region of Manufacture": "Japan",
+                        "Language": "Japanese",
+                    }
+                    if _game:
+                        g = scrub_ebay_fragment(str(_game))
+                        if g:
+                            kwargs["item_specifics"]["Game"] = g[:60]
+                logger.warning(
+                    "  🔄 improper words → 安全化リトライ (pass %s/3)",
+                    kwargs["_ebay_improper_scrub"],
+                )
+                return add_item_to_ebay(**kwargs)
+
+        # Item Specifics 改名・eBay 推奨値 / 修正不可系 → specifics を段階的に削ってリトライ
+        spec_relax = kwargs.get("_ebay_spec_relax", 0)
+        if spec_relax < 3 and (
+            "renamed" in errs_lower
+            or "cannot be listed or modified" in errs_lower
+            or "as per ebay" in errs_lower
+        ):
+            kwargs["_ebay_spec_relax"] = spec_relax + 1
+            orig_specs = dict(kwargs.get("item_specifics", {}) or {})
+            if spec_relax == 0:
+                keep_keys = (
+                    "Game", "Sport", "Country/Region of Manufacture", "Language", "Card Name",
+                )
+                kwargs["item_specifics"] = {
+                    k: v for k, v in orig_specs.items() if k in keep_keys
+                }
+            elif spec_relax == 1:
+                kwargs["item_specifics"] = {
+                    "Country/Region of Manufacture": "Japan",
+                    "Language": "Japanese",
+                }
+            else:
+                kwargs["item_specifics"] = {}
+            logger.warning(f"  🔄 eBay Item Specifics 緩和リトライ (stage {spec_relax + 1}/3)")
+            return add_item_to_ebay(**kwargs)
+
+        if "shipping" in errs_lower or "profile" in errs_lower:
+            logger.error(
+                "  ❌ eBay shipping/profile エラー — band 外のデフォルト差し替えは行わない: %s",
+                " / ".join(errs),
+            )
+            return {"success": False, "errors": errs}
+
         retry_count = kwargs.get("_retry_count", 0)
         if retry_count >= 3:
             return {"success": False, "errors": errs}
         kwargs["_retry_count"] = retry_count + 1
 
-        # シッピングポリシーエラー → デフォルトに変更
-        if ("shipping" in errs_lower or "profile" in errs_lower) and policy_id != SHIPPING_POLICY_DEFAULT:
-            kwargs["shipping_policy_id"] = SHIPPING_POLICY_DEFAULT
-            return add_item_to_ebay(**kwargs)
-
-        # Conditionエラー → Used(3000)にフォールバック
-        if "condition" in errs_lower and ("invalid" in errs_lower or "not valid" in errs_lower):
+        # Conditionエラー → Used(3000)（トレカ単品カテゴリ以外のみ）
+        if (
+            "condition" in errs_lower
+            and ("invalid" in errs_lower or "not valid" in errs_lower)
+            and _cid not in EBAY_CARD_SINGLE_CATEGORY_IDS
+        ):
             logger.warning("  🔄 Condition変更 → Used(3000)でリトライ")
             kwargs["_force_condition"] = "3000"
             return add_item_to_ebay(**kwargs)
 
-        # ポリシー違反（improper words）→ タイトル・説明文を安全版に差替え
-        if "improper" in errs_lower or "violation" in errs_lower:
+        # improper は上で最大3パス処理済み。violation のみ別メッセージのときだけ安全版へ
+        if "violation" in errs_lower and "improper" not in errs_lower:
             import re as _re2
-            logger.warning("  🔄 ポリシー違反 → タイトル・説明文を安全版でリトライ")
-            clean_title = _re2.sub(r'[^\w\s\-/.,()#]', '', kwargs.get("title", "")).strip()[:80]
-            kwargs["title"] = clean_title
-            kwargs["desc_html"] = "<p>Authentic Japanese collectible. Ships from Japan worldwide with tracking.</p><p>Please see photos for condition details.</p>"
+            logger.warning("  🔄 ポリシー violation → タイトル・説明文を安全版でリトライ")
+            clean_title = _re2.sub(r"[^\w\s\-/.,()#]", "", kwargs.get("title", "")).strip()[:80]
+            kwargs["title"] = clean_title or "Japanese Collectible"
+            kwargs["desc_html"] = (
+                "<p>Authentic Japanese collectible. Please see photos for condition details.</p>"
+                + LISTING_SHIPPING_NOTE_HTML
+            )
+            kwargs["item_specifics"] = sanitize_item_specifics_values(kwargs.get("item_specifics") or {})
             return add_item_to_ebay(**kwargs)
 
         # Item Specificsエラー → 必須項目のみに絞る
@@ -497,6 +895,16 @@ def add_item_to_ebay(**kwargs) -> dict:
             return add_item_to_ebay(**kwargs)
 
         return {"success": False, "errors": errs}
+    except EbayTradingRateLimited as e:
+        logger.error("  [eBay Trading] HTTP 429 — 処理停止（Phase 0）: %s", e)
+        ebay_breaker.record_failure()
+        try:
+            from notifier import notify_slack
+
+            notify_slack(f"🛑 **[eBay Trading] AddFixedPriceItem** 429 — {e}")
+        except Exception:
+            pass
+        return {"success": False, "errors": [str(e)]}
     except Exception as e:
         ebay_breaker.record_failure()
         return {"success": False, "errors": [str(e)]}
@@ -541,7 +949,13 @@ def check_ebay_token_health() -> dict:
   <RequesterCredentials><eBayAuthToken>{EBAY_AUTH_TOKEN}</eBayAuthToken></RequesterCredentials>
 </GetUserRequest>"""
     try:
-        resp = requests.post(EBAY_ENDPOINT, headers=headers, data=xml.encode("utf-8"), timeout=15)
+        resp = trading_post(
+            EBAY_ENDPOINT,
+            headers,
+            xml.encode("utf-8"),
+            "GetUser_token_health",
+            timeout=15,
+        )
         root = ET.fromstring(resp.text)
         ns = {"ns": "urn:ebay:apis:eBLBaseComponents"}
         ack = root.find("ns:Ack", ns)
@@ -549,6 +963,8 @@ def check_ebay_token_health() -> dict:
             return {"valid": True}
         errs = [e.text for e in root.findall(".//ns:LongMessage", ns)]
         return {"valid": False, "errors": errs}
+    except EbayTradingRateLimited as e:
+        return {"valid": False, "errors": [str(e)]}
     except Exception as e:
         return {"valid": False, "errors": [str(e)]}
 
@@ -607,20 +1023,42 @@ def run_auto_listing(
     max_priority_success: int = None,
     max_auto_success: int = None,
 ):
-    lock_file = open('/tmp/auto_lister.lock', 'w')
-    try: fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except: return
+    lock_path = "/tmp/auto_lister.lock"
+    lock_file = open(lock_path, "w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        lock_file.close()
+        msg = (
+            f"⏳ auto_lister をスキップ: ロック取得できず（別実行中の可能性） "
+            f"{lock_path}: {e}"
+        )
+        logger.warning(msg)
+        try:
+            notify_slack(msg[:300])
+        except Exception:
+            pass
+        return
 
     backup_critical_files()
 
     logger.info("🚀 Profit-Driven Command Cockpit Start")
 
     # === test_rules.py ゲート（絶対ルール） ===
+    # 既定120秒だと Google/メルカリが遅いと TimeoutExpired になるため長めにする（秒で上書き可）
     import subprocess
-    _test_result = subprocess.run(
-        [sys.executable, _os_mod.path.join(_os_mod.path.dirname(_os_mod.path.abspath(__file__)), "test_rules.py")],
-        capture_output=True, text=True, timeout=120
-    )
+    _tr_timeout = int(os.environ.get("TEST_RULES_TIMEOUT_SEC", "600"))
+    try:
+        _test_result = subprocess.run(
+            [sys.executable, _os_mod.path.join(_os_mod.path.dirname(_os_mod.path.abspath(__file__)), "test_rules.py")],
+            capture_output=True, text=True, timeout=_tr_timeout,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error(
+            f"🚨 test_rules.py が {_tr_timeout} 秒でタイムアウト — 出品中止（遅延時は TEST_RULES_TIMEOUT_SEC を増やす）"
+        )
+        notify_slack("🚨 test_rules.py タイムアウト — auto_lister 出品中止")
+        return
     if _test_result.returncode != 0:
         logger.error(f"🚨 test_rules.py 失敗 — 出品中止")
         logger.error(_test_result.stdout[-500:] if _test_result.stdout else "no output")
@@ -676,9 +1114,15 @@ def run_auto_listing(
     fail_count = 0
     priority_success_count = 0
     auto_success_count = 0
+    success_by_department: Dict[str, int] = {}
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        _launch = dict(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
+        _launch.update(playwright_launch_kwargs())
+        browser = p.chromium.launch(**_launch)
         try:
             listing_capped = False
             for s_name in [PRIORITY_SHEET_NAME, AUTO_SHEET_NAME] + AUTO_SHEETS:
@@ -698,6 +1142,8 @@ def run_auto_listing(
                     continue
 
                 logger.info(f"--- チャンネル開始: {s_name} ({len(items)}件) ---")
+                # 行削除を挟むため、下の行から処理（行番号ズレ防止）
+                items = sorted(items, key=lambda x: x["row"], reverse=True)
                 for item in items:
                     if is_priority_sheet:
                         if (
@@ -705,7 +1151,7 @@ def run_auto_listing(
                             and priority_success_count >= max_priority_success
                         ):
                             logger.info(
-                                f"⏹️ 優先出品は成功{max_priority_success}件に達したため {s_name} の残りをスキップ"
+                                f"⏹️ {PRIORITY_SHEET_NAME} は成功{max_priority_success}件に達したため {s_name} の残りをスキップ"
                             )
                             break
                     else:
@@ -737,21 +1183,54 @@ def run_auto_listing(
                     processed_urls.add(url)
 
                     # B列から「期待利益」を読み取る
-                    res = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"{s_name}!B{row_num}").execute()
+                    res = service.spreadsheets().values().get(
+                        spreadsheetId=SPREADSHEET_ID, range=_a1_range(s_name, f"B{row_num}")
+                    ).execute()
                     profit_val = res.get("values", [["0"]])[0][0]
                     try: profit_jpy = int(str(profit_val).replace(",", "").replace("円", ""))
                     except: profit_jpy = 5000 # デフォルト
 
-                    update_item_status(row_num, "⏳ 処理中", s_name)
+                    update_item_status(row_num, "⏳ メルカリ取得中", s_name)
                     scraped = None
-                    for retry in range(3):
-                        scraped = scrape_mercari_item(url, playwright_browser=browser)
+                    max_sc = MERCARI_SCRAPE_MAX_RETRIES
+                    for retry in range(max_sc):
+                        try:
+                            scraped = scrape_mercari_item(
+                                url,
+                                playwright_browser=browser,
+                                require_buy_button=(s_name != PRIORITY_SHEET_NAME),
+                            )
+                        except MercariPipelineStopped as mps:
+                            logger.error("  メルカリ sourcing 停止（Phase0）: %s", mps)
+                            try:
+                                from notifier import notify_slack
+
+                                notify_slack(
+                                    f"🛑 **[Mercari] listing 停止** Phase0 rate limit\n{mps}\n{url[:200]}"
+                                )
+                            except Exception:
+                                pass
+                            update_item_status(
+                                row_num,
+                                "🛑 メルカリRL停止",
+                                s_name,
+                            )
+                            return
                         if scraped.get("success"):
                             break
-                        logger.warning(f"  スクレイプ失敗 (リトライ {retry+1}/3): {url}")
-                        time.sleep(3 * (retry + 1))
+                        logger.warning(
+                            f"  スクレイプ失敗 (リトライ {retry + 1}/{max_sc}): {url} — {scraped.get('error', '')}"
+                        )
+                        time.sleep(MERCARI_SCRAPE_RETRY_BASE_SEC * (retry + 1))
                     if not scraped or not scraped.get("success"):
-                        update_item_status(row_num, "❌ スクレイプ失敗(3回)", s_name); continue
+                        err = (scraped or {}).get("error") or "不明"
+                        err_one = err.replace("\n", " ").strip()[:100]
+                        update_item_status(
+                            row_num,
+                            f"❌ スクレイプ失敗({max_sc}回): {err_one}",
+                            s_name,
+                        )
+                        continue
 
                     # ========== 出品前メルカリ状態チェック（必須・3層防御） ==========
                     # 無在庫転売のため、仕入れ不可能な商品の出品は厳禁
@@ -772,32 +1251,54 @@ def run_auto_listing(
                         logger.warning(f"  ⛔ 購入不可商品を除外: {url} (status={mercari_status})")
                         continue
                     #
-                    # 層2: mercari_checker.pyのAPI判定（DOM解析を信用しない二重チェック）
-                    try:
-                        from mercari_checker import check_mercari_status as _mc_check
-                        mc_result = _mc_check(url, delay=0.5)
-                        mc_status = mc_result.get("status", "")
-                        if mc_status == "auction":
-                            update_item_status(row_num, "⛔ オークション除外(API)", s_name)
-                            logger.warning(f"  ⛔ オークション商品を除外(API): {url}")
+                    # 層2: mercari_checker（自動キューのみ）。手動はユーザー選定のため二重チェックしない。
+                    if s_name != PRIORITY_SHEET_NAME:
+                        try:
+                            from mercari_checker import check_mercari_status as _mc_check
+                            mc_result = _mc_check(url, delay=0.5, playwright_browser=browser)
+                            mc_status = mc_result.get("status", "")
+                            if mc_status == "auction":
+                                update_item_status(row_num, "⛔ オークション除外(API)", s_name)
+                                logger.warning(f"  ⛔ オークション商品を除外(API): {url}")
+                                continue
+                            if mc_status in ("sold_out", "deleted"):
+                                update_item_status(row_num, "⛔ 売切/削除(API)", s_name)
+                                logger.warning(f"  ⛔ 売切/削除商品を除外(API): {url}")
+                                continue
+                        except Exception as mc_err:
+                            logger.warning(f"  ⚠️ API二重チェック失敗（安全のためスキップ）: {mc_err}")
+                            update_item_status(row_num, "⚠️ メルカリAPI確認失敗", s_name)
                             continue
-                        if mc_status in ("sold_out", "deleted"):
-                            update_item_status(row_num, "⛔ 売切/削除(API)", s_name)
-                            logger.warning(f"  ⛔ 売切/削除商品を除外(API): {url}")
-                            continue
-                    except Exception as mc_err:
-                        logger.warning(f"  ⚠️ API二重チェック失敗（安全のためスキップ）: {mc_err}")
-                        update_item_status(row_num, "⚠️ メルカリAPI確認失敗", s_name)
-                        continue
+                    else:
+                        logger.info("  手動キュー: メルカリAPI二重チェックをスキップ（ユーザー選定）")
                     # ============================================
 
+                    update_item_status(row_num, "⏳ 価格・利益を計算中", s_name)
                     # 価格計算（利益に従順）
                     mercari_price = int(scraped["price_jpy"])
-                    if s_name != PRIORITY_SHEET_NAME and (mercari_price < 1000 or mercari_price > 250000):
-                        update_item_status(row_num, "⚠️ 仕入価格範囲外", s_name); continue
+                    # 「手動」タブはユーザー選定のためメルカリ仕入れ額の上下限チェックはしない
+                    if s_name != PRIORITY_SHEET_NAME:
+                        max_purchase = AUTO_MAX_MERCARI_PURCHASE_JPY
+                        if mercari_price < MIN_MERCARI_PURCHASE_JPY or mercari_price > max_purchase:
+                            update_item_status(
+                                row_num,
+                                f"⚠️ 仕入価格範囲外 (¥{MIN_MERCARI_PURCHASE_JPY:,}〜¥{max_purchase:,})",
+                                s_name,
+                            )
+                            continue
                     price_usd = calculate_listing_price(mercari_price, profit_jpy)
                     # 最低$99、最高$2,499
                     price_usd = max(price_usd, 99.0)
+                    # 手動のみ: $2499 以上は頭打ちせずスキップ（高額を安く売らない）
+                    if s_name == PRIORITY_SHEET_NAME and price_usd >= float(
+                        MANUAL_LISTING_SKIP_PRICE_USD_GTE
+                    ):
+                        update_item_status(
+                            row_num,
+                            f"⚠️ 手動: ${MANUAL_LISTING_SKIP_PRICE_USD_GTE}+ は出品不可 (計${price_usd:.2f})",
+                            s_name,
+                        )
+                        continue
                     price_usd = min(price_usd, 2499.0)
                     # 最終利益・ROI検証（B列は価格逆算用。最低利益は部署keywordsの min_profit_jpy と共通ルールのみ）
                     final_profit = calc_profit(price_usd, mercari_price)
@@ -810,12 +1311,18 @@ def run_auto_listing(
                         )
                     if mercari_price >= 50000:
                         min_profit_required = max(min_profit_required, 5000)
-                    if final_profit < min_profit_required:
+                    if s_name != PRIORITY_SHEET_NAME and final_profit < min_profit_required:
                         update_item_status(row_num, f"⚠️ 利益不足 ¥{int(final_profit):,} (要¥{min_profit_required:,}+)", s_name); continue
                     logger.info(f"  💰 出品価格${price_usd} | 利益¥{int(final_profit):,} | ROI{roi:.0f}%")
 
+                    update_item_status(row_num, "⏳ AIでタイトル・説明作成中", s_name)
                     # 部署自動判定（上で取得済み）
-                    ai_data = ai_analyze(scraped["title"], scraped["description"], dept=detected_dept)
+                    ai_data = ai_analyze(
+                        scraped["title"],
+                        scraped["description"],
+                        dept=detected_dept,
+                        condition_ja=scraped.get("condition_label_ja", ""),
+                    )
                     if not ai_data:
                         update_item_status(row_num, "❌ AI分析失敗", s_name); continue
 
@@ -831,6 +1338,7 @@ def run_auto_listing(
                         if ai_cat not in VALID_CATEGORIES:
                             ai_data["category_id"] = detected_dept["ebay_category_id"]
 
+                    update_item_status(row_num, "⏳ 画像をeBayへ送信中", s_name)
                     eps_urls = []
                     for j, img in enumerate(scraped.get("image_bytes", [])[:12]):
                         eps = upload_picture_bytes(img["bytes"], filename=f"i_{j}.jpg")
@@ -851,6 +1359,7 @@ def run_auto_listing(
                         description_html=ai_data.get("description_html", ""),
                         is_priority=(s_name == PRIORITY_SHEET_NAME),
                         existing_urls=master_urls,
+                        manual_sheet=(s_name == PRIORITY_SHEET_NAME),
                     )
                     if not sv_result["approved"]:
                         reason = " / ".join(sv_result["violations"])
@@ -865,33 +1374,44 @@ def run_auto_listing(
                         fail_count += 1
                         continue
 
+                    update_item_status(row_num, "⏳ eBayに出品中", s_name)
                     ebay_res = add_item_to_ebay(
                         mercari_url=url, title=ai_data.get("title", ""),
                         desc_html=ai_data.get("description_html", ""),
                         price_usd=price_usd, image_urls=eps_urls,
                         category_id=ai_data.get("category_id", "1345"),
                         item_specifics=ai_data.get("item_specifics", {}),
-                        shipping_policy_id=get_shipping_policy_id(price_usd),
-                        dept=detected_dept
+                        dept=detected_dept,
+                        mercari_condition_ja=scraped.get("condition_label_ja", ""),
                     )
 
                     if ebay_res["success"] and not dry_run:
                         item_id = ebay_res["item_id"]
                         logger.info(f"  ✅ 成功: {item_id}")
-                        # C列に出品価格($)、D列にItemID、E列にStatus
-                        try:
-                            service.spreadsheets().values().update(
-                                spreadsheetId=SPREADSHEET_ID, range=f"{s_name}!C{row_num}:E{row_num}",
-                                valueInputOption="USER_ENTERED", body={"values": [[f"${price_usd}", item_id, "✅ 出品済み"]]}
-                            ).execute()
-                        except Exception as sheet_err:
-                            logger.error(f"  ⚠️ Sheet更新失敗（手動復旧要）: url={url} item_id={item_id} price=${price_usd} error={sheet_err}")
+                        inv_ok = False
                         try:
                             append_item_to_inventory(url, item_id)
+                            inv_ok = True
                         except Exception as inv_err:
                             logger.error(f"  ⚠️ 在庫登録失敗（手動復旧要）: url={url} item_id={item_id} error={inv_err}")
+                        # C=出品価格 D=eBay ItemID E=ステータス を必ず書く（成功がシート上で分かるようにする）
+                        # 行は即削除しない。00:00 の smart_cleanup が「出品済み」行のみ掃除。
+                        status_cell = "✅ 出品済み" if inv_ok else "⚠️在庫表未登録"
+                        try:
+                            service.spreadsheets().values().update(
+                                spreadsheetId=SPREADSHEET_ID,
+                                range=f"{s_name}!C{row_num}:E{row_num}",
+                                valueInputOption="USER_ENTERED",
+                                body={"values": [[f"${price_usd}", str(item_id), status_cell]]},
+                            ).execute()
+                            logger.info(f"  📝 {s_name} 行{row_num}: C〜E に価格・ItemID・{status_cell}")
+                        except Exception as sheet_err:
+                            logger.error(f"  ⚠️ 出品成功だがシート更新失敗（手動復旧要）: {sheet_err}")
                         master_urls.add(url)
                         success_count += 1
+                        _dn = (detected_dept or {}).get("department")
+                        _dl = str(_dn).strip() if _dn else "未分類"
+                        success_by_department[_dl] = success_by_department.get(_dl, 0) + 1
                         if is_priority_sheet:
                             priority_success_count += 1
                         else:
@@ -909,7 +1429,24 @@ def run_auto_listing(
             browser.close()
 
     if not dry_run and (success_count or fail_count):
-        notify_slack(f"出品完了: 成功{success_count}件 / 失敗{fail_count}件")
+        notify_slack(
+            f"出品完了: 成功{success_count}件 / 失敗{fail_count}件 "
+            f"（手動・自動出品シートは C〜E に $・ItemID・ステータス。出品済み行は翌日0時頃にシートから削除）"
+        )
+        try:
+            from listing_metrics import record_listing_session, write_daily_report_md
+
+            record_listing_session(
+                success_count,
+                fail_count,
+                success_by_department if success_count else None,
+            )
+            report_path, obs_report = write_daily_report_md()
+            logger.info(f"日報を更新: {report_path}")
+            if obs_report:
+                logger.info(f"Obsidian Vault 日報: {obs_report}")
+        except Exception as _met_err:
+            logger.warning(f"listing_metrics 記録失敗: {_met_err}")
 
 if __name__ == "__main__":
     import argparse
@@ -920,7 +1457,7 @@ if __name__ == "__main__":
         "--max-priority-success",
         type=int,
         metavar="N",
-        help="優先出品シートでの出品成功が N 件に達したら優先チャンネルを打ち切り",
+        help="手動キュー（PRIORITY_SHEET_NAME）での出品成功が N 件に達したらそのチャンネルを打ち切り",
     )
     parser.add_argument(
         "--max-auto-success",

@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 import os
 import sys
 import json
 import logging
+import time
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from requests.exceptions import RequestException
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from config import EBAY_AUTH_TOKEN, EBAY_APP_ID, EBAY_DEV_ID, EBAY_CERT_ID, EBAY_SITE_ID, EBAY_ENV
@@ -69,10 +73,34 @@ def get_recent_orders():
   <OrderStatus>Completed</OrderStatus>
 </GetOrdersRequest>"""
 
-    resp = requests.post(endpoint, headers=headers, data=xml_body.encode("utf-8"), timeout=30)
-    root = ET.fromstring(resp.text)
+    last_exc: Exception | None = None
+    resp = None
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                endpoint, headers=headers, data=xml_body.encode("utf-8"), timeout=45
+            )
+            if resp.status_code == 429:
+                from utils.phase0_guards import rate_limit_guard
+
+                rate_limit_guard(resp, "eBay Trading:GetOrders")
+            break
+        except RequestException as e:
+            last_exc = e
+            logger.warning(f"GetOrders 接続失敗 attempt {attempt + 1}/3: {e}")
+            time.sleep(2 * (attempt + 1))
+    if resp is None:
+        logger.error(f"GetOrders リクエスト失敗（リトライ後）: {last_exc}")
+        return []
+
+    try:
+        root = ET.fromstring(resp.text)
+    except ET.ParseError as e:
+        logger.error(f"GetOrders 応答XML解析失敗: {e} body[:500]={resp.text[:500]!r}")
+        return []
+
     ns = {"ns": "urn:ebay:apis:eBLBaseComponents"}
-    
+
     ack = root.find("ns:Ack", ns)
     if ack is None or ack.text not in ("Success", "Warning"):
         logger.error(f"GetOrders API Error: {resp.text[:500]}")
@@ -164,6 +192,14 @@ def main():
             except Exception as e:
                 logger.error(f"  Mercari check failed: {e}")
 
+        # 注文確定時は eBay 在庫0を 1 回だけ実行。
+        # （git blame 同一コミットで分岐内と末尾に mark が二重に入っていたため統合）
+        try:
+            mark_out_of_stock(o["item_id"])
+            logger.info(f"  eBay在庫0: {o['item_id']}")
+        except Exception as e:
+            logger.error(f"  eBay在庫0失敗: {e}")
+
         if mercari_available:
             msg = (
                 f"*🚨 売れました！仕入れてください*\n"
@@ -172,15 +208,13 @@ def main():
                 f"仕入先: {source_url}"
             )
         else:
-            # 在庫切れ → 緊急警告 + eBay在庫0にする
-            logger.warning(f"  ⚠️ メルカリ在庫なし！eBay在庫0にします: {o['item_id']}")
-            mark_out_of_stock(o['item_id'])
+            logger.warning(f"  ⚠️ メルカリ在庫なし（eBay在庫0は上で実行済）: {o['item_id']}")
             msg = (
                 f"*🔴 売れたけどメルカリ在庫なし！*\n"
                 f"{title_ja}\n"
                 f"売上: ${o['price']}\n"
                 f"仕入先: {source_url}\n"
-                f"→ eBay在庫0に変更済み。代替品を探すかキャンセル検討してください"
+                f"→ eBay在庫0を適用済み。代替品を探すかキャンセル検討してください"
             )
 
         send_slack(msg)
@@ -203,13 +237,6 @@ def main():
                     logger.info(f"  📝 SOLD記録: {source_url[:50]}")
             except Exception as e:
                 logger.error(f"  SOLD記録失敗: {e}")
-
-        # eBay在庫を0にする（売れたので在庫は不要）
-        try:
-            mark_out_of_stock(o["item_id"])
-            logger.info(f"  eBay在庫0: {o['item_id']}")
-        except Exception as e:
-            logger.error(f"  eBay在庫0失敗: {e}")
 
         processed.add(uid)
         new_finds = True

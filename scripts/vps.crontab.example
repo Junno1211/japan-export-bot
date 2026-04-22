@@ -1,0 +1,41 @@
+# 海外輸出ボット — VPS 用 crontab 例
+# BOT パスは deploy.sh の VPS_DIR（デフォルト /opt/export-bot）に合わせて置換してください。
+#
+# 時刻は JST（日本標準時）。VPS のシステム時刻が UTC のときも、この行で cron の解釈を JST に揃えます。
+# 念のため: sudo timedatectl set-timezone Asia/Tokyo も推奨。
+#
+# 適用例:
+#   sed 's|/opt/export-bot|/実際のパス|g' scripts/vps.crontab.example | crontab -
+#
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+CRON_TZ=Asia/Tokyo
+
+# ---- 在庫管理（3時間ごと0分・JST: 0,3,6,9,12,15,18,21）【必須・ビジネスの要。本行を crontab から削除しない】----
+# メルカリ照合〜eBay反映は config 既定でオン。止めるときだけ VPS .env に INVENTORY_APPLY_EBAY_OOS=0 または false
+# 毎時に戻すときは先頭を 0 * * * * に。
+0 */3 * * * cd /opt/export-bot && ./venv/bin/python3 -u inventory_manager.py >> logs/cron_inventory.log 2>&1
+
+# ---- 推奨: 注文監視（毎時5分・JST）----
+5 * * * * cd /opt/export-bot && ./venv/bin/python3 -u order_monitor.py >> logs/cron_orders.log 2>&1
+
+# ---- 朝の流れ（JST）----
+# 1:00 — auto_sourcer（eBay 相場・メルカリ仕入れ候補をシートへ。全 sourcing/*/keywords.json + スプレッドシート「検索キーワード」）
+#        最大 2 時間で打ち切り（1〜3時台に収めたい場合）。延びる場合はキーワード数や --max-per-keyword を減らす。
+0 1 * * * cd /opt/export-bot && /usr/bin/timeout 2h ./venv/bin/python3 -u auto_sourcer.py --max-per-keyword 12 >> logs/cron_sourcer.log 2>&1
+
+# 4:00 — 本日の出品開始件数が 70 に達するまで test_rules → auto_lister をループ（成功/失敗とも Slack）
+# ※70品は「出品待ちキュー・test_rules・eBay API」が許す範囲。足りない日は Slack で未達通知。
+0 4 * * * cd /opt/export-bot && bash scripts/fill_daily_until_done.sh 70 >> logs/cron_fill.log 2>&1
+
+# ---- 手動キュー（スプレッドシート「手動」タブ）PC なしで定期的に処理 ----
+# 引数なし = その時点で溜まっている分を処理。重複起動は priority_listings_background.sh 内の flock で抑止。
+# 初回だけなら VPS で bash scripts/ensure_priority_cron.sh でも同じ 1 行を入れられる。
+*/30 * * * * cd /opt/export-bot && bash scripts/priority_listings_background.sh >> logs/cron_priority_bg.log 2>&1
+# 一度に何件までにしたいときだけ数字を付ける例: ... priority_listings_background.sh 5
+
+# ---- Phase 0: 稼働ハートビート（15分毎・JST）----
+*/15 * * * * cd /opt/export-bot && ./venv/bin/python3 -u heartbeat.py >> logs/cron_heartbeat.log 2>&1
+
+# ---- 旧テンプレ（単発・夜間など。使うときは # を外して調整）----
+# 0 22 * * * cd /opt/export-bot && bash scripts/fill_daily_until_done.sh 30 >> logs/cron_fill.log 2>&1
