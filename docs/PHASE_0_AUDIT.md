@@ -23,7 +23,7 @@
 | **v2 系** | `mercari_head_stage1` + `_mercari_oos_playwright_stage2_only` + `mercari_oos_verdict_pass1/2` + pending JSON | HEAD 404=`deleted` 確定、DOM `sold_strict`→`sold_tentative`（二段で OOS）、auction、タイムアウトは `ambiguous` |
 
 **`inventory_manager.py`** が `INVENTORY_MERCARI_OOS_V2` で **同一実行内では v2 か従来（HTML+API）かを排他選択**。  
-**`scripts/inventory_manager_v3.py`** は `mercari_checker` を **import しておらず**、別実装の Playwright + `page.evaluate`。**「v3」は mercari_checker の版ではなく在庫 v3 スクリプトを指す**。
+**`scripts/inventory_manager_v3.py`** は **Playwright + `page.evaluate`** が主系統で、二系統突合用に `mercari_checker.check_mercari_status` / `_mercari_api_item_snapshot_no_html` を import（在庫本流の `inventory_manager.py` は変更しない）。**「v3」は mercari_checker の版ラベルではなく在庫 v3 スクリプトを指す**。
 
 **補足:** `_check_auction_by_playwright`（`page.goto` 30000ms）は定義のみで、本リポジトリ内に **参照箇所は grep 上ゼロ**（デッドコードに近い）。
 
@@ -51,11 +51,12 @@
 | `inventory_manager.py` | 393–420 | v2 ON：`deleted` / `auction` は **pass1 単回で即 `mark_out_of_stock`** | 無 | v2。v3/cron 別なら **併走可** | **要確認**: sold だけ二段で del/auc が一段であることの妥当性 |
 | `inventory_manager.py` | 421–437 | v2：`sold_tentative` → pending（**単回では OOS しない**） | 無 | v2 | 意図どおり |
 | `inventory_manager.py` | 447–532 | v2 OFF：`html_verify_urls` → API。`sold_out`/`deleted`/`auction` で **`mark_out_of_stock`**。`error`/`html_error` は **OOS しない** | 無 | 従来系 | HTML+API の整合 |
-| `scripts/inventory_manager_v3.py` | 187–245 | `_classify_mercari_dom`（JS 文字列）：`deleted` / `sold` / `auction` / `active` | 無（1 回 evaluate） | **`inventory_manager.py` と独立** | **併走時は二重 OOS リスク** |
-| `scripts/inventory_manager_v3.py` | 256–276 | `page.goto` **networkidle** + 待機；タイムアウト/例外 → **`verdict: active`（OOS 断定しない）** | goto 再試行なし | v3 のみ | Phase 0「曖昧は進めない」と整合 |
-| `scripts/inventory_manager_v3.py` | 284–289 | URL が notfound 系 → **`deleted` 確定** | 無 | v3 | — |
-| `scripts/inventory_manager_v3.py` | 311–322 | DOM `empty_html` / `deleted` / `auction` / `sold` を **verdict に確定反映** | 無 | v3 | `sold` は item-detail 文言依存 |
-| `scripts/inventory_manager_v3.py` | 333–356 | `_mark_oos_v3` → **`set_quantity(..., 0)`**（`sold`/`auction`/`deleted` のみ） | `set_quantity` 単発失敗はログのみ | v3 | eBay 側 HTTP 429 リトライなし（`ebay_updater` 依存） |
+| `scripts/inventory_manager_v3.py` | 199–258 | `_classify_mercari_dom`（JS IIFE 源）：DOM 上の `deleted` / `sold` / `auction` / `active` の素地 | **`with_retry(..., retries=1)`** で `page.evaluate`（最大 2 回） | **`inventory_manager.py` と独立** | 併走時は二重 OOS リスク（運用で排他） |
+| `scripts/inventory_manager_v3.py` | 261–365 | `_inspect_mercari_url`：**`playwright_goto_with_retry`**（`wait_until=load`, **attempts=2**）+ 主要 selector 待ち + 2.5s；タイムアウト/例外 → **`verdict: active`（OOS 断定しない）** | **goto 一時系のみ再試行** | v3 のみ | Phase 0「曖昧は進めない」と整合（Step 2.7 再棚: 2026-04-23） |
+| `scripts/inventory_manager_v3.py` | 313–318 | URL が notfound 系 → **`deleted` verdict**（単体では `_v3_dual_confirm_oos` 前） | 無 | v3 | HEAD は二系統内 |
+| `scripts/inventory_manager_v3.py` | 346–360 | DOM `empty_html` / `deleted` / `auction` / `sold` / `active` を **verdict に反映** | 上記 evaluate リトライ | v3 | `sold` は item-detail 文言依存 |
+| `scripts/inventory_manager_v3.py` | 388–428 | **`_v3_dual_confirm_oos`**：DOM + API（+ `url_notfound` 時 HEAD 404）。不一致 / `error` / `html_error` → **OOS しない** | API は `item_id` ありで DOM と並走取得可（突合ロジック不変） | v3 **二系統** | — |
+| `scripts/inventory_manager_v3.py` | 431–446 | `_mark_oos_v3` → **`set_quantity(0)`**（dual_ok の `sold`/`auction`/`deleted` のみ） | `set_quantity` 単発失敗はログのみ | v3 | eBay 429 は `ebay_updater` 依存 |
 | `mercari_scraper.py` | 84 | クローラ本体：`page.goto(..., MERCARI_PAGE_GOTO_TIMEOUT_MS)` | 呼び出し元（例: `auto_lister`）が `MERCARI_SCRAPE_MAX_RETRIES` でリトライ | 出品・仕入系 | config で ms 統一 |
 | `mercari_scraper.py` | 88–93 | レート制限検出 → **`error` 相当**（`success` False、`Rate limited`） | `mercari_breaker` のみ | 出品系 | 売切断定ではない |
 | `mercari_scraper.py` | 130–134 | DOM/JSON 等で売切シグナル → **`status: sold_out` 確定** | 無（1 ページ内） | 出品系 | `auto_lister` が参照 |
@@ -155,11 +156,23 @@ Cursor のシェルから次を実行したが、いずれも **`Permission deni
 
 段階デプロイ **Stage F 異常なし** のあと、コードと本番ログを突き合わせて更新する。
 
-- [ ] `mercari_checker.py` / `mercari_scraper.py` / `auto_sourcer.py` / `scripts/inventory_manager_v3.py` / `ebay_updater.py` / `auto_lister.py` / `order_monitor.py` / `heartbeat.py` の Phase 0 変更が意図どおりか  
-- [ ] **タイムアウト・429・二系統不一致**時に「売切/OOS」と断定していないログがあるか（v3 Slack メトリクス含む）  
-- [ ] 実機 `crontab -l` に **v3** と **heartbeat `*/15`** が並存しているか  
+### 実施記録（2026-04-23）
 
-**grep 参考**（詳細は [PHASE_0_DEPLOY_STAGED.md](./PHASE_0_DEPLOY_STAGED.md) Stage G）:
+- [x] `mercari_checker.py` / `mercari_scraper.py` / `auto_sourcer.py` / `scripts/inventory_manager_v3.py` / `ebay_updater.py` / `auto_lister.py` / `order_monitor.py` / `heartbeat.py` の Phase 0 変更が意図どおりか（**v3** は `phase0-perf` を `2026-04-04-mq2r` に merge 済み。性能・二系統・リトライは [PHASE_0_PERF_ANALYSIS.md](./PHASE_0_PERF_ANALYSIS.md) §2–§4・§8 参照）  
+- [x] **タイムアウト・429・二系統不一致**時に「売切/OOS」と断定していないこと — **dry-run 108 件**でタイムアウト 0・二系統不一致 0・誤 OOS 0（実測は §8）。本番ログは cron 再有効化後に別途確認。  
+- [ ] 実機 `crontab -l` に **v3** と **heartbeat `*/15`** が並存しているか — **本タスク範囲外**（純之介が cron 再有効化を別途判断）。未取得の VPS 節は従来どおり。
+
+### grep 再確認（Phase 0 ガード違反パターンの混入なし）
+
+実施ディレクトリ: `海外輸出ボット/`（`japan-export-bot/` はミラー扱いで本監査の正本から除外）。
+
+1. **確定判定に絡む `page.goto` の直叩き**（`phase0_guards` 外）  
+   - `rg 'page\\.goto\\(' --glob '*.py'` → 本番ツリーでは **`utils/phase0_guards.py`**（`playwright_goto_with_retry` 内）および **`manual_sourcer.py`**（手動リサーチ）のみ。在庫 v3 / `mercari_checker` / `mercari_scraper` は **`playwright_goto_with_retry(..., attempts=2)`** 経由。  
+2. **`playwright_goto_with_retry` の `attempts`**  
+   - `rg 'playwright_goto_with_retry\\(' --glob '*.py'` の呼び出しはすべて **`attempts=2` 明示、または省略（既定 2）** — **リトライ無し化なし**。  
+3. **v3 二系統**  
+   - `_v3_dual_confirm_oos` が `scripts/inventory_manager_v3.py` に残存し、`set_quantity(0)` は dual_ok 後のみ。  
+4. **参考（Stage G 文書どおり）**
 
 ```bash
 cd "/Users/miyazakijunnosuke/Downloads/eBay/海外輸出ボット"
@@ -167,16 +180,20 @@ rg "requests\.post\(" ebay_updater.py
 rg -n "mark_out_of_stock" order_monitor.py
 ```
 
+**結論**: 新規の「goto 直叩きで確定」「リトライ削除」「二系統突合スキップ」パターンは **検出されず**。監査表の v3 行は上表（`scripts/inventory_manager_v3.py` 5 行）に **2026-04-23 時点のソース**で更新済み。
+
 ---
 
 ## Phase 0 完了（二者確認・Stage G）
 
 **1 サイクル監視異常なし**ののち、次を実施してから本ファイルを **`PHASE_0_COMPLETED.md`** にリネームする。
 
+**運用（2026-04-23）**: 以下に **確認者1** を記録した時点では本ファイル名は **`PHASE_0_AUDIT.md` のまま**とする。**確認者2（純之介）の最終承認**および Stage G 完了判断のあと、リネームする。
+
 | 役割 | 氏名 | 日付 | 署名 |
 |------|------|------|------|
-| 実装・デプロイ確認 | | | （未記入） |
-| 承認（オーナー） | | | （未記入） |
+| 実装・デプロイ確認 | Claude Code（Cursor Agent） | 2026-04-23 | Step 2.7 grep 実施。実測: **v3 dry-run 108 件を約 13 分で完走**、誤 OOS・タイムアウト・二系統不一致は **いずれも 0**（詳細 [PHASE_0_PERF_ANALYSIS.md](./PHASE_0_PERF_ANALYSIS.md) §8）。`merge(phase0-perf)` を `2026-04-04-mq2r` に反映済み。本番 deploy・cron 再有効化は未実施（純之介判断）。 |
+| 承認（オーナー） | 純之介 | （最終承認待ち） | 次回コミュニケーションで承認・日付・署名を記入のうえ **`PHASE_0_COMPLETED.md` へリネーム**する。 |
 
 ---
 
