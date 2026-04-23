@@ -11,7 +11,7 @@ inventory_manager_v3.py — メルカリ照合（純之介3条件ルールのみ
   cd /opt/export-bot
   ./venv/bin/python3 -u scripts/inventory_manager_v3.py --dry-run --limit 10 --verbose
 
-Playwright: networkidle + 10 秒待機のため 1 件あたり時間が長い。まず dry-run で確認すること。
+Playwright: load + 主要 DOM 待ち + 短い描画安定待ち（旧 networkidle+10s から縮小）。まず dry-run で確認すること。
 """
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from datetime import datetime
@@ -47,7 +48,11 @@ from config import (  # noqa: E402
     SLACK_WEBHOOK_URL_ORDERS,
 )
 from ebay_updater import get_all_active_list_items, set_quantity  # noqa: E402
-from mercari_checker import check_mercari_status  # noqa: E402
+from feature_a import extract_mercari_item_id  # noqa: E402
+from mercari_checker import (  # noqa: E402
+    _mercari_api_item_snapshot_no_html,
+    check_mercari_status,
+)
 from mercari_proxy import playwright_launch_kwargs  # noqa: E402
 from sheets_manager import map_ebay_item_id_to_row_and_url  # noqa: E402
 
@@ -261,22 +266,30 @@ def _inspect_mercari_url(url: str, page) -> dict[str, Any]:
       maintain_sub: in_stock | indeterminate_timeout | indeterminate_exception
                   | indeterminate_empty_html | indeterminate_other | None
     """
-    # networkidle は時間がかかるため下限を上げる。続けて 10 秒待機で描画安定。
-    goto_ms = max(180_000, int(MERCARI_PAGE_GOTO_TIMEOUT_MS))
+    # networkidle は SPA で長時間ブロックしやすい。load + 主要 UI 待ち + 短い安定待ちに変更。
+    # goto タイムアウト: config を尊重しつつ 55s〜120s（旧 180s 下限は廃止）。
+    _cfg = int(MERCARI_PAGE_GOTO_TIMEOUT_MS)
+    goto_ms = min(120_000, max(55_000, _cfg))
     try:
         from utils.phase0_guards import playwright_goto_with_retry
 
         playwright_goto_with_retry(
             page,
             url,
-            wait_until="networkidle",
+            wait_until="load",
             timeout_ms=goto_ms,
             attempts=2,
+            sleep_between=0.5,
         )
         try:
-            page.wait_for_timeout(10_000)
+            page.wait_for_selector(
+                '[data-testid="checkout-button"], [data-testid="item-detail-container"], '
+                '[data-testid="item-name"], [data-testid="item-price"]',
+                timeout=12_000,
+            )
         except Exception:
-            time.sleep(10)
+            pass
+        time.sleep(2.5)
     except Exception as e:
         err = str(e).lower()
         if "timeout" in err:
@@ -372,14 +385,26 @@ def _head_status_for_deleted_confirm(url: str) -> int | None:
         return None
 
 
-def _v3_dual_confirm_oos(mercari_url: str, verdict: str, reason: str) -> tuple[bool, str, dict]:
+def _v3_dual_confirm_oos(
+    mercari_url: str,
+    verdict: str,
+    reason: str,
+    *,
+    api_snap: dict[str, Any] | None = None,
+) -> tuple[bool, str, dict]:
     """
     Phase0 論点A: DOM(Playwright) + API（+ url_notfound 時は HEAD 404）の二系統で OOS 確定。
     不一致・API 不定のときは OOS しない。
+
+    api_snap: item_id がある場合に Playwright と並走で取得した API 結果（二系統の独立性は維持）。
+    None のとき（Shops 等 item_id なし）は従来どおり check_mercari_status。
     """
     if verdict not in ("sold", "auction", "deleted"):
         return False, "not_oos_verdict", {}
-    api = check_mercari_status(mercari_url, delay=0.2)
+    if api_snap is not None:
+        api = api_snap
+    else:
+        api = check_mercari_status(mercari_url, delay=0.15)
     ast = api.get("status", "error")
     snap: dict = {"api_status": ast}
     if ast in ("error", "html_error"):
@@ -539,6 +564,9 @@ def run_inventory_check_v3(
                 )
                 page = ctx.new_page()
                 page.add_init_script(_V3_INIT_SCRIPT)
+                api_pool = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="v3_mercapi"
+                )
                 try:
                     for i, row in enumerate(targets, start=1):
                         ebay_id = row["ebay_id"]
@@ -546,15 +574,45 @@ def run_inventory_check_v3(
                         action_taken = "MAINTAINED"
                         verdict = "active"
                         reason = ""
+                        api_future = None
                         try:
+                            mid = extract_mercari_item_id(murl)
+                            if mid:
+                                api_future = api_pool.submit(
+                                    _mercari_api_item_snapshot_no_html, mid
+                                )
                             info = _inspect_mercari_url(murl, page)
                             verdict = info["verdict"]
                             reason = info.get("reason") or ""
                             sub = info.get("maintain_sub")
 
+                            api_snap_for_dual: dict[str, Any] | None = None
+                            if api_future is not None:
+                                if verdict in ("sold", "auction", "deleted"):
+                                    try:
+                                        api_snap_for_dual = api_future.result(
+                                            timeout=22
+                                        )
+                                    except Exception as ex:
+                                        api_snap_for_dual = {
+                                            "status": "error",
+                                            "title": "",
+                                            "price": "",
+                                            "error": str(ex),
+                                        }
+                                else:
+                                    if not api_future.cancel():
+                                        try:
+                                            api_future.result(timeout=25)
+                                        except Exception:
+                                            pass
+
                             if verdict == "sold":
                                 dual_ok, dual_note, _snap = _v3_dual_confirm_oos(
-                                    murl, verdict, reason
+                                    murl,
+                                    verdict,
+                                    reason,
+                                    api_snap=api_snap_for_dual if mid else None,
                                 )
                                 if not dual_ok:
                                     counts["active_dual_reject"] += 1
@@ -580,7 +638,10 @@ def run_inventory_check_v3(
                                 )
                             elif verdict == "auction":
                                 dual_ok, dual_note, _snap = _v3_dual_confirm_oos(
-                                    murl, verdict, reason
+                                    murl,
+                                    verdict,
+                                    reason,
+                                    api_snap=api_snap_for_dual if mid else None,
                                 )
                                 if not dual_ok:
                                     counts["active_dual_reject"] += 1
@@ -606,7 +667,10 @@ def run_inventory_check_v3(
                                 )
                             elif verdict == "deleted":
                                 dual_ok, dual_note, _snap = _v3_dual_confirm_oos(
-                                    murl, verdict, reason
+                                    murl,
+                                    verdict,
+                                    reason,
+                                    api_snap=api_snap_for_dual if mid else None,
                                 )
                                 if not dual_ok:
                                     counts["active_dual_reject"] += 1
@@ -655,6 +719,12 @@ def run_inventory_check_v3(
                                     reason[:200],
                                 )
                         except Exception as ex:
+                            if api_future is not None:
+                                try:
+                                    if not api_future.cancel():
+                                        api_future.result(timeout=25)
+                                except Exception:
+                                    pass
                             counts["process_error"] += 1
                             action_taken = "ERROR"
                             verdict = "error"
@@ -673,8 +743,9 @@ def run_inventory_check_v3(
                                 "action_taken": action_taken,
                             }
                         )
-                        time.sleep(0.25)
+                        time.sleep(0.12)
                 finally:
+                    api_pool.shutdown(wait=True)
                     try:
                         page.close()
                     except Exception:
