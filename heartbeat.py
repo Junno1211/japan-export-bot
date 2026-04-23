@@ -102,6 +102,6 @@ def run_phase0_heartbeat() -> None:
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s [%(level)s] %(message)s",
+        format="%(asctime)s [%(levelname)s] %(message)s",
     )
     run_phase0_heartbeat()
