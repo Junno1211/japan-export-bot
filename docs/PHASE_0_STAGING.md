@@ -46,3 +46,7 @@
 ## メモ
 
 - Phase 0 Step 2 の実装は **本番 API 互換**のままガードを追加している。Sandbox 未整備でも **429 時は処理停止 + Slack** により誤確定より安全側に倒す。
+
+## 関連（完了記録）
+
+- [PHASE_0_COMPLETED.md](./PHASE_0_COMPLETED.md) — Phase 0 棚卸し・再棚・二者確認の正本（旧 `PHASE_0_AUDIT.md` を 2026-04-23 に `git mv`）

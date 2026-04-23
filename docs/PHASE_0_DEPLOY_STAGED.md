@@ -106,14 +106,16 @@ crontab -l
 
 ## Stage G: 完了記録（1 サイクル異常なしのあと）
 
-リポジトリ（Mac / Cursor）で実施:
+**2026-04-23**: リポジトリ（Mac / Cursor）で手順 1〜4 を実施し、正本は **[PHASE_0_COMPLETED.md](./PHASE_0_COMPLETED.md)**（旧 `docs/PHASE_0_AUDIT.md` を `git mv`）に集約済み。
 
-1. `docs/PHASE_0_AUDIT.md` の **Step 2.7（再棚卸し）** を実施し、表を更新する。  
+作業時のチェックリスト（完了後の参照用）:
+
+1. **Step 2.7（再棚卸し）** — 監査表の更新（[PHASE_0_COMPLETED.md](./PHASE_0_COMPLETED.md)）  
 2. 下記 **grep 参考** で明らかな退行がないことを確認する（ゼロ保証の厳密証明ではない）。  
-3. `docs/PHASE_0_AUDIT.md` の **二者確認** に署名・日付を記入する。  
-4. `docs/PHASE_0_AUDIT.md` を **`docs/PHASE_0_COMPLETED.md`** にリネームする。  
-5. `docs/PHASE_0_STAGING.md` に「ステージングなし段階デプロイ実施済み」を追記する。  
-6. `git commit` & `git push`  
+3. **二者確認** — 純之介の最終承認（同上ファイル）  
+4. **`PHASE_0_COMPLETED.md` へのリネーム** — `git mv` 済み  
+5. `docs/PHASE_0_STAGING.md` に「ステージングなし段階デプロイ実施済み」等を追記する（オーナー判断）  
+6. `git commit` & `git push`（push はオーナーの Mac から）  
 
 ### Step 2.7 用 grep 参考（Mac、リポジトリルート）
 
@@ -149,4 +151,4 @@ crontab -e
 
 - [PHASE_0_STAGING.md](./PHASE_0_STAGING.md) — ステージング欄 + 本手順の索引  
 - [PHASE_0_DEFERRED.md](./PHASE_0_DEFERRED.md) — Phase 0.5 / Phase 1 持ち越し  
-- [PHASE_0_AUDIT.md](./PHASE_0_AUDIT.md) — Step 1 監査（完了時は COMPLETED にリネーム）
+- [PHASE_0_COMPLETED.md](./PHASE_0_COMPLETED.md) — Step 1 棚卸し・Step 2.7・二者確認の完了記録（2026-04-23）

@@ -126,7 +126,7 @@ v3 は **既に** `sync_playwright` 1 回・`chromium.launch` 1 回・**同一 `
 
 - [x] dry-run（`--limit 20` および全件）でログ・Slack に異常がないか（§8 実測）  
 - [x] `active_timeout` / `active_dual_reject` の件数が従来比で異常増していないか（§8: いずれも 0）  
-- [x] `2026-04-04-mq2r` への merge — **2026-04-23**（`merge(phase0-perf): …` コミット。`PHASE_0_AUDIT.md` Step 2.7 参照）
+- [x] `2026-04-04-mq2r` への merge — **2026-04-23**（`merge(phase0-perf): …` コミット。[PHASE_0_COMPLETED.md](./PHASE_0_COMPLETED.md) Step 2.7 参照）
 
 ---
 

@@ -17,7 +17,7 @@
 ## 運用
 
 - **ステージング環境なし**での本番段階デプロイは [PHASE_0_DEPLOY_STAGED.md](./PHASE_0_DEPLOY_STAGED.md) に手順化済み。  
-- **実機 `crontab -l` 全文**は [PHASE_0_AUDIT.md](./PHASE_0_AUDIT.md) の VPS 節に追記し、例ファイルと突合すること。
+- **実機 `crontab -l` 全文**は [PHASE_0_COMPLETED.md](./PHASE_0_COMPLETED.md) の VPS 節に追記し、例ファイルと突合すること。
 
 ---
 

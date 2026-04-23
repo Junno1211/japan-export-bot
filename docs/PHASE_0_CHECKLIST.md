@@ -46,7 +46,7 @@
 
 ## 参照（リポジトリ内）
 
-- [PHASE_0_AUDIT.md](./PHASE_0_AUDIT.md)（Step 1 棚卸し・Step 2.7 再棚）
+- [PHASE_0_COMPLETED.md](./PHASE_0_COMPLETED.md)（Step 1 棚卸し・Step 2.7 再棚・完了承認）
 - [PHASE_0_DEPLOY_STAGED.md](./PHASE_0_DEPLOY_STAGED.md)（本番段階デプロイ Stage A〜G）
 - [PHASE_0_STAGING.md](./PHASE_0_STAGING.md) / [PHASE_0_DEFERRED.md](./PHASE_0_DEFERRED.md)
 - `mercari_checker.py`（v2 HEAD + DOM + pending 等）
