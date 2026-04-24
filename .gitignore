@@ -1,5 +1,6 @@
 # Secrets — never commit
 .env
+scripts/vps.env
 config.py
 google_credentials.json
 *SSH鍵設定.command
@@ -61,3 +62,6 @@ backups/
 # Lock files
 *.lock
 .main_lock
+
+# PDF 中間生成（pandoc HTML）
+docs/.pdf-build/
