@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,8 @@ def load_price_bands(path: Path) -> dict[str, tuple[float, float]]:
             high = float(bounds[1])
         except (TypeError, ValueError):
             continue
+        if str(name) == "premium":
+            high = float("inf")
         bands[str(name)] = (low, high)
     return bands
 
@@ -63,10 +66,17 @@ def _match_keywords(title: str, keywords: list[str]) -> list[str]:
         if not k:
             continue
         key = k.casefold()
-        if key in haystack and key not in seen:
+        if _keyword_matches(haystack, key) and key not in seen:
             matched.append(k)
             seen.add(key)
     return matched
+
+
+def _keyword_matches(haystack: str, keyword: str) -> bool:
+    # 2文字程度の略語（NM/EXなど）は通常単語への誤爆が多いため境界付きで見る。
+    if len(keyword) <= 2 and keyword.isalnum():
+        return re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", haystack) is not None
+    return keyword in haystack
 
 
 def _match_price_band(price_usd: float, bands: dict[str, tuple[float, float]]) -> list[str]:

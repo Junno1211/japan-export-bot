@@ -55,6 +55,19 @@ def test_condition_near_mint_partial_match() -> None:
     assert "Holo" in tags["condition"]
 
 
+def test_condition_short_nm_requires_token_boundary() -> None:
+    tags = tag_product("Gunmetal figure", 120.0, dictionaries={**_dicts(), "condition": ["NM"]})
+    assert tags["condition"] == []
+    assert tag_product("Pokemon Card NM", 120.0, dictionaries={**_dicts(), "condition": ["NM"]})["condition"] == [
+        "NM"
+    ]
+
+
+def test_condition_short_ex_requires_token_boundary() -> None:
+    tags = tag_product("Excellent card", 120.0, dictionaries={**_dicts(), "condition": ["EX", "Excellent"]})
+    assert tags["condition"] == ["Excellent"]
+
+
 def test_series_tag_extraction() -> None:
     tags = tag_product("Shohei Ohtani BBM 2024 rare card", 350.0, dictionaries=_dicts())
     assert tags["series"] == ["BBM 2024"]
@@ -79,6 +92,12 @@ def test_price_band_high_boundary() -> None:
 
 def test_price_band_premium_boundary() -> None:
     assert tag_product("x", 1000.0, dictionaries=_dicts())["price_band"] == ["premium"]
+
+
+def test_price_band_premium_has_no_effective_upper_cap(tmp_path: Path) -> None:
+    p = tmp_path / "price_bands.json"
+    p.write_text(json.dumps({"premium": [1000, 999999]}), encoding="utf-8")
+    assert load_price_bands(p)["premium"][1] == float("inf")
 
 
 def test_multiple_tag_categories_at_once() -> None:

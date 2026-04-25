@@ -111,7 +111,8 @@ def test_aggregate_sales_by_tags() -> None:
     ]
     tags = aggregate_sales_by_tags(lines)
     chars = {r.tag: r for r in tags["character"]}
-    assert chars["Ohtani"].revenue_usd == 864.0
+    assert "Ohtani" not in chars
+    assert chars["Shohei Ohtani"].revenue_usd == 864.0
     assert chars["Luffy"].count == 1
     assert chars["(該当なし)"].revenue_usd == 50.0
     bands = {r.tag: r for r in tags["price_band"]}
@@ -152,3 +153,19 @@ def test_markdown_report_includes_tag_sections(tmp_path) -> None:
     assert "## キャラ別" in body
     assert "| Pikachu | 150 | 1 |" in body
     assert "## 価格帯別" in body
+
+
+def test_tag_aggregation_canonicalizes_overlapping_condition_tags() -> None:
+    lines = [SoldLine("o1", "1", "Pokemon Card Near Mint", 150.0, "")]
+    tags = aggregate_sales_by_tags(
+        lines,
+        dictionaries={
+            "character": [],
+            "condition": ["Mint", "Near Mint"],
+            "series": [],
+            "price_band": {"mid": (100.0, 300.0)},
+        },
+    )
+    conditions = {r.tag: r for r in tags["condition"]}
+    assert "Mint" not in conditions
+    assert conditions["Near Mint"].count == 1

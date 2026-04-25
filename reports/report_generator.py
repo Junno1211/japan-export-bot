@@ -146,9 +146,24 @@ def _tag_sort_key(row: TagSalesAgg) -> tuple[int, float, str]:
     return (1 if row.tag == "(該当なし)" else 0, -row.revenue_usd, row.tag)
 
 
-def aggregate_sales_by_tags(sold_lines: list[SoldLine]) -> dict[str, list[TagSalesAgg]]:
+def _canonical_tags_for_aggregation(tags: list[str]) -> list[str]:
+    """包含関係のあるタグは長い（より具体的な）タグだけを集計代表にする。"""
+    kept: list[str] = []
+    for tag in sorted(tags, key=lambda x: (-len(x), x.casefold())):
+        low = tag.casefold()
+        if any(low in k.casefold() or k.casefold() in low for k in kept):
+            continue
+        kept.append(tag)
+    return sorted(kept, key=lambda x: tags.index(x))
+
+
+def aggregate_sales_by_tags(
+    sold_lines: list[SoldLine],
+    *,
+    dictionaries: dict[str, Any] | None = None,
+) -> dict[str, list[TagSalesAgg]]:
     """商品タグ別に売上・件数を集計する。部署別集計とは独立した横断集計。"""
-    dictionaries = load_tag_dictionaries()
+    dictionaries = dictionaries if dictionaries is not None else load_tag_dictionaries()
     buckets: dict[str, dict[str, dict[str, float | int]]] = {
         "character": {},
         "condition": {},
@@ -160,7 +175,7 @@ def aggregate_sales_by_tags(sold_lines: list[SoldLine]) -> dict[str, list[TagSal
         price = float(ln.price_usd)
         tags = tag_product(ln.title, price, dictionaries=dictionaries)
         for category in ("character", "condition", "series"):
-            names = tags.get(category) or ["(該当なし)"]
+            names = _canonical_tags_for_aggregation(tags.get(category) or []) or ["(該当なし)"]
             for name in names:
                 b = buckets[category].setdefault(name, {"revenue_usd": 0.0, "count": 0})
                 b["revenue_usd"] = float(b["revenue_usd"]) + price
@@ -231,9 +246,17 @@ def format_terminal_table(
     if tag_sections:
         for category in ("character", "condition", "series", "price_band"):
             tag_rows = tag_sections.get(category) or []
-            lines_out.extend(["", f"## {TAG_SECTION_TITLES[category]}", "タグ             | 売上(USD) | 件数", "─" * 34])
+            width = max([14, *[len(r.tag) for r in tag_rows]])
+            lines_out.extend(
+                [
+                    "",
+                    f"## {TAG_SECTION_TITLES[category]}",
+                    f"{'タグ':<{width}} | {'売上(USD)':>9} | {'件数':>4}",
+                    "─" * (width + 20),
+                ]
+            )
             for r in tag_rows:
-                lines_out.append(f"{r.tag:<14} | {r.revenue_usd:>9,.0f} | {r.count:>4}")
+                lines_out.append(f"{r.tag:<{width}} | {r.revenue_usd:>9,.0f} | {r.count:>4}")
     return "\n".join(lines_out)
 
 
