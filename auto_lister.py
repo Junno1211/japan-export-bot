@@ -1062,26 +1062,32 @@ def run_auto_listing(
     logger.info("🚀 Profit-Driven Command Cockpit Start")
 
     # === test_rules.py ゲート（絶対ルール） ===
-    # 既定120秒だと Google/メルカリが遅いと TimeoutExpired になるため長めにする（秒で上書き可）
-    import subprocess
-    _tr_timeout = int(os.environ.get("TEST_RULES_TIMEOUT_SEC", "600"))
-    try:
-        _test_result = subprocess.run(
-            [sys.executable, _os_mod.path.join(_os_mod.path.dirname(_os_mod.path.abspath(__file__)), "test_rules.py")],
-            capture_output=True, text=True, timeout=_tr_timeout,
-        )
-    except subprocess.TimeoutExpired:
-        logger.error(
-            f"🚨 test_rules.py が {_tr_timeout} 秒でタイムアウト — 出品中止（遅延時は TEST_RULES_TIMEOUT_SEC を増やす）"
-        )
-        notify_slack("🚨 test_rules.py タイムアウト — auto_lister 出品中止")
-        return
-    if _test_result.returncode != 0:
-        logger.error(f"🚨 test_rules.py 失敗 — 出品中止")
-        logger.error(_test_result.stdout[-500:] if _test_result.stdout else "no output")
-        notify_slack("🚨 test_rules.py 失敗 — auto_lister 出品中止")
-        return
-    logger.info("✅ test_rules.py 全テスト合格")
+    # 手動キュー単独（run_priority_listings.sh: --max-auto-success 0）は、
+    # ユーザーが目視選定したURLだけを処理するため test_rules.py を通さない。
+    priority_only_run = max_auto_success == 0
+    if priority_only_run:
+        logger.info("⏭️ 手動キュー単独実行のため test_rules.py をスキップ")
+    else:
+        # 既定120秒だと Google/メルカリが遅いと TimeoutExpired になるため長めにする（秒で上書き可）
+        import subprocess
+        _tr_timeout = int(os.environ.get("TEST_RULES_TIMEOUT_SEC", "600"))
+        try:
+            _test_result = subprocess.run(
+                [sys.executable, _os_mod.path.join(_os_mod.path.dirname(_os_mod.path.abspath(__file__)), "test_rules.py")],
+                capture_output=True, text=True, timeout=_tr_timeout,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error(
+                f"🚨 test_rules.py が {_tr_timeout} 秒でタイムアウト — 出品中止（遅延時は TEST_RULES_TIMEOUT_SEC を増やす）"
+            )
+            notify_slack("🚨 test_rules.py タイムアウト — auto_lister 出品中止")
+            return
+        if _test_result.returncode != 0:
+            logger.error(f"🚨 test_rules.py 失敗 — 出品中止")
+            logger.error(_test_result.stdout[-500:] if _test_result.stdout else "no output")
+            notify_slack("🚨 test_rules.py 失敗 — auto_lister 出品中止")
+            return
+        logger.info("✅ test_rules.py 全テスト合格")
 
     # === SUPERVISOR: 設定改ざんチェック ===
     config_check = validate_config_unchanged()

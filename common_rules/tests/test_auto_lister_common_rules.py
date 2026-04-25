@@ -28,3 +28,10 @@ def test_listing_ai_prompt_built_from_common_rules_replacements() -> None:
 
 def test_no_title_slice_literal_80() -> None:
     assert "[:80]" not in _auto_lister_source()
+
+
+def test_priority_only_run_skips_test_rules_gate() -> None:
+    text = _auto_lister_source()
+    assert "priority_only_run = max_auto_success == 0" in text
+    assert "手動キュー単独実行のため test_rules.py をスキップ" in text
+    assert "else:\n        # 既定120秒" in text
