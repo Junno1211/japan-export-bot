@@ -96,7 +96,7 @@ def build_tag_rankings(
     sold_lines: list[SoldLine],
     *,
     dictionaries: dict[str, Any] | None = None,
-    top_n: int = 5,
+    top_n: int | None = 5,
 ) -> dict[str, list[TagRankingRow]]:
     dictionaries = dictionaries if dictionaries is not None else load_tag_dictionaries()
     buckets: dict[str, dict[str, dict[str, float | int]]] = {
@@ -122,7 +122,7 @@ def build_tag_rankings(
             if tag != "(該当なし)"
         ]
         rows.sort(key=lambda r: _sort_revenue_count(r.tag, r.revenue_usd, r.count))
-        rankings[category] = rows[:top_n]
+        rankings[category] = rows if top_n is None else rows[:top_n]
     return rankings
 
 
@@ -233,7 +233,8 @@ def build_intelligence_report(
     previous_sold_lines: list[SoldLine] | None = None,
     dictionaries: dict[str, Any] | None = None,
 ) -> IntelligenceReport:
-    rankings = build_tag_rankings(sold_lines, dictionaries=dictionaries)
+    full_rankings = build_tag_rankings(sold_lines, dictionaries=dictionaries, top_n=None)
+    rankings = {category: rows[:5] for category, rows in full_rankings.items()}
     cross_condition, cross_price_band = build_cross_rankings(sold_lines, dictionaries=dictionaries)
     department_summary = build_department_summary(sold_lines, profiles)
 
@@ -242,8 +243,8 @@ def build_intelligence_report(
     if previous_sold_lines is not None:
         prev_summary = build_department_summary(previous_sold_lines, profiles)
         department_trends = build_monthly_trends(department_summary, prev_summary)
-        prev_rankings = build_tag_rankings(previous_sold_lines, dictionaries=dictionaries, top_n=9999)
-        tag_trends = build_tag_trends(build_tag_rankings(sold_lines, dictionaries=dictionaries, top_n=9999), prev_rankings)
+        prev_rankings = build_tag_rankings(previous_sold_lines, dictionaries=dictionaries, top_n=None)
+        tag_trends = build_tag_trends(full_rankings, prev_rankings)
 
     return IntelligenceReport(
         month_label=month_label,
@@ -288,6 +289,27 @@ def format_intelligence_markdown(report: IntelligenceReport) -> str:
         lines.extend(["", "## 前月比", "", "| 部署 | 当月 | 前月 | 増減 |", "|---|---:|---:|---:|"])
         for row in report.department_trends:
             lines.append(f"| {row.label} | {_usd(row.current_usd)} | {_usd(row.previous_usd)} | {_usd(row.delta_usd)} |")
+
+    if report.tag_trends:
+        lines.extend(["", "## タグ別前月比", ""])
+        for category in ("character", "condition", "series", "price_band"):
+            rows = report.tag_trends.get(category) or []
+            lines.extend(
+                [
+                    f"### {TAG_CATEGORY_LABELS[category]}",
+                    "",
+                    "| タグ | 当月 | 前月 | 増減 |",
+                    "|---|---:|---:|---:|",
+                ]
+            )
+            if not rows:
+                lines.append("| (データなし) | $0 | $0 | $0 |")
+            else:
+                for row in rows:
+                    lines.append(
+                        f"| {row.label} | {_usd(row.current_usd)} | {_usd(row.previous_usd)} | {_usd(row.delta_usd)} |"
+                    )
+            lines.append("")
 
     return "\n".join(lines) + "\n"
 

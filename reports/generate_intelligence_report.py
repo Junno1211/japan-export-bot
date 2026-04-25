@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from reports.department_classifier import load_department_profiles
-from reports.ebay_data_fetcher import fetch_completed_orders
+from reports.ebay_data_fetcher import SoldLine, fetch_completed_orders
 from reports.intelligence import (
     build_intelligence_report,
     format_intelligence_markdown,
@@ -57,7 +57,7 @@ def previous_month_range(start: datetime) -> tuple[datetime, datetime]:
     return prev_start, start
 
 
-def fetch_lines_for_range(start_local: datetime, end_local: datetime):
+def fetch_lines_for_range(start_local: datetime, end_local: datetime) -> list[SoldLine]:
     start_utc = start_local.astimezone(timezone.utc)
     end_utc = end_local.astimezone(timezone.utc)
     logger.info("GetOrders 取得: %s 〜 %s (UTC)", start_utc.isoformat(), end_utc.isoformat())

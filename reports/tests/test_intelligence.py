@@ -137,6 +137,13 @@ def test_report_with_previous_month_contains_trends() -> None:
     body = format_intelligence_markdown(report)
     assert "## 前月比" in body
     assert "| Ohtani | $864 | $500 | $364 |" in body
+    assert "## タグ別前月比" in body
+    assert "| Shohei Ohtani | $864 | $500 | $364 |" in body
+
+
+def test_build_tag_rankings_top_n_none_returns_all() -> None:
+    rankings = build_tag_rankings(_lines(), dictionaries=_dicts(), top_n=None)
+    assert len(rankings["character"]) == 3
 
 
 def test_month_label_from_date() -> None:
