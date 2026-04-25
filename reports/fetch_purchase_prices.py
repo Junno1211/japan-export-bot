@@ -3,7 +3,7 @@
 在庫管理表のメルカリ URL から仕入価格(円)を取得し「仕入価格(JPY)」列に書き込む。
 
 - Google Sheets API は sheets_manager のヘルパーのみ利用（sheets_manager 本体は変更しない）
-- スプレッドシート ID は本スクリプト内の定数（config の SPREADSHEET_ID とは別）
+- スプレッドシート ID は config.SPREADSHEET_ID（読み取りのみ・config ファイルは変更しない）
 - メルカリ取得は Playwright + ページ内 JS（mercari_scraper の価格抽出パターンを参考に独立実装）
 """
 
@@ -27,8 +27,14 @@ from googleapiclient.errors import HttpError
 
 logger = logging.getLogger(__name__)
 
-# 在庫管理表（依頼仕様の専用ブック・シート）
-INVENTORY_SPREADSHEET_ID = "1RfNtaqyzjpiwD4LqLbD_cPIGTj62cUorfKywPYtJ128"
+
+def load_inventory_spreadsheet_id() -> str:
+    """在庫ブックの Spreadsheet ID（config の SPREADSHEET_ID を参照するだけ）。"""
+    from config import SPREADSHEET_ID
+
+    return SPREADSHEET_ID
+
+
 INVENTORY_SHEET_NAME = "在庫管理表1"
 PURCHASE_HEADER = "仕入価格(JPY)"
 # A=ItemID, B=商品名, C=仕入先, D=URL, E=在庫状況, F=Status, G=在庫切れ時の対応 → H=仕入価格(既定)
@@ -257,6 +263,7 @@ def run(
     fetch_impl: Callable[[str], tuple[int | None, str | None]] | None = None,
     sleep_fn: Callable[[float], None] | None = None,
     get_service: Callable[[], Any] | None = None,
+    spreadsheet_id: str | None = None,
 ) -> None:
     _sleep = sleep_fn or time.sleep
     if get_service is None:
@@ -264,9 +271,10 @@ def run(
 
         get_service = _get_service
     service = get_service()
+    ss_id = spreadsheet_id if spreadsheet_id is not None else load_inventory_spreadsheet_id()
 
     logger.info("在庫管理表 %s を読み込み中...", INVENTORY_SHEET_NAME)
-    header = read_header_row(service, INVENTORY_SPREADSHEET_ID, INVENTORY_SHEET_NAME)
+    header = read_header_row(service, ss_id, INVENTORY_SHEET_NAME)
     while len(header) < MIN_PURCHASE_COL_INDEX + 1:
         header.append("")
 
@@ -277,7 +285,7 @@ def run(
         if not dry_run:
             update_cell(
                 service,
-                INVENTORY_SPREADSHEET_ID,
+                ss_id,
                 INVENTORY_SHEET_NAME,
                 1,
                 pidx,
@@ -289,7 +297,7 @@ def run(
 
     last_col_idx = max(pidx, MIN_PURCHASE_COL_INDEX, len(header) - 1)
     last_letter = col_index_to_a1(last_col_idx)
-    rows = read_data_rows(service, INVENTORY_SPREADSHEET_ID, INVENTORY_SHEET_NAME, last_letter)
+    rows = read_data_rows(service, ss_id, INVENTORY_SHEET_NAME, last_letter)
 
     pending: list[tuple[int, str, str]] = []  # (sheet_row, item_id, url)
     for i, row in enumerate(rows):
@@ -323,7 +331,7 @@ def run(
             logger.info("[%s/%s] 価格取得成功: ¥%s", n, len(pending), f"{int(price):,}")
             update_cell(
                 service,
-                INVENTORY_SPREADSHEET_ID,
+                ss_id,
                 INVENTORY_SHEET_NAME,
                 sheet_row,
                 pidx,

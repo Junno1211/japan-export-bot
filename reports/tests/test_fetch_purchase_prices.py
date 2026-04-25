@@ -98,6 +98,7 @@ def test_run_dry_run_passes_dry_run_to_update_cell(
         fetch_impl=fetch_impl,
         sleep_fn=lambda _x: None,
         get_service=lambda: mock_svc,
+        spreadsheet_id="test_spreadsheet_id_no_config",
     )
 
     assert mock_update_cell.called
@@ -122,6 +123,7 @@ def test_run_adds_header_when_missing(
         fetch_impl=lambda u: (100, None),
         sleep_fn=lambda _x: None,
         get_service=lambda: mock_svc,
+        spreadsheet_id="test_spreadsheet_id_no_config",
     )
     mock_update_cell.assert_called()
     first = mock_update_cell.call_args_list[0]
