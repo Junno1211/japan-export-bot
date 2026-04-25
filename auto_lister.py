@@ -17,7 +17,7 @@ import requests
 import xml.etree.ElementTree as ET
 import fcntl
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple
 import google.generativeai as genai
 from playwright.sync_api import sync_playwright
 
@@ -75,8 +75,59 @@ VALID_CATEGORIES = {"183454", "183455", "261328", "69528", "31387", "1345"}
 
 # eBay トレカ単品系: ConditionID 3000(Used) は使えない（4000 アングレ / 2750 グレードのみ）
 EBAY_CARD_SINGLE_CATEGORY_IDS = frozenset({"183454", "261328", "183050"})
-# API 用 Card Condition 記述子は固定（eBay 拒否・切り替え失敗を減らす）。実物の状態は説明文で伝える。
+# eBay Trading Cards condition descriptors:
+# https://developer.ebay.com/api-docs/user-guides/static/mip-user-guide/mip-enum-condition-descriptor-ids-for-trading-cards.html
+EBAY_CARD_GRADED_CONDITION_ID = "2750"
+EBAY_CARD_UNGRADED_CONDITION_ID = "4000"
+EBAY_CARD_CONDITION_DESCRIPTOR_NAME_ID = "40001"
 EBAY_CARD_UNGRADED_DESCRIPTOR_VALUE = "400010"
+EBAY_CARD_EXCELLENT_DESCRIPTOR_VALUE = "400011"
+EBAY_CARD_VERY_GOOD_DESCRIPTOR_VALUE = "400012"
+EBAY_CARD_POOR_DESCRIPTOR_VALUE = "400013"
+EBAY_CARD_GRADER_DESCRIPTOR_NAME_ID = "27501"
+EBAY_CARD_GRADE_DESCRIPTOR_NAME_ID = "27502"
+
+MERCARI_CARD_CONDITION_DESCRIPTOR_BY_LABEL = {
+    "新品、未使用": EBAY_CARD_UNGRADED_DESCRIPTOR_VALUE,
+    "未使用に近い": EBAY_CARD_UNGRADED_DESCRIPTOR_VALUE,
+    "目立った傷や汚れなし": EBAY_CARD_UNGRADED_DESCRIPTOR_VALUE,
+    "やや傷や汚れあり": EBAY_CARD_EXCELLENT_DESCRIPTOR_VALUE,
+    "傷や汚れあり": EBAY_CARD_VERY_GOOD_DESCRIPTOR_VALUE,
+    "全体的に状態が悪い": EBAY_CARD_POOR_DESCRIPTOR_VALUE,
+}
+
+EBAY_CARD_GRADER_DESCRIPTOR_VALUE_BY_NAME = {
+    "PSA": "275010",
+    "BGS": "275013",
+    "CGC": "275015",
+}
+
+EBAY_CARD_GRADE_DESCRIPTOR_VALUE_BY_GRADE = {
+    "10": "275020",
+    "9.5": "275021",
+    "9": "275022",
+    "8.5": "275023",
+    "8": "275024",
+    "7.5": "275025",
+    "7": "275026",
+    "6.5": "275027",
+    "6": "275028",
+    "5.5": "275029",
+    "5": "2750210",
+    "4.5": "2750211",
+    "4": "2750212",
+    "3.5": "2750213",
+    "3": "2750214",
+    "2.5": "2750215",
+    "2": "2750216",
+    "1.5": "2750217",
+    "1": "2750218",
+}
+
+_GRADED_CARD_RE = re.compile(
+    r"(?<![A-Za-z0-9])(PSA|BGS|CGC)\s*[-:]?\s*(10|[1-9](?:\.5|\.0)?)(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 
 # 説明文 Shipping 用（URL・ドル額は書かない）。Gemini プロンプトと improper フォールバックで揃える
 LISTING_SHIPPING_NOTE_HTML = (
@@ -280,6 +331,73 @@ _LISTING_AI_QUALITY_RULES = (
 def _cdata_safe(text: str, max_len: int = 980) -> str:
     s = (text or "").replace("]]>", "]] >")
     return s[:max_len]
+
+
+def _normalize_card_grade(grade: str) -> str:
+    normalized = (grade or "").strip()
+    if normalized.endswith(".0"):
+        normalized = normalized[:-2]
+    return normalized
+
+
+def _detect_graded_card(title: str, description: str) -> Optional[Tuple[str, str]]:
+    text = f"{title or ''}\n{description or ''}"
+    match = _GRADED_CARD_RE.search(text)
+    if not match:
+        return None
+
+    grader = match.group(1).upper()
+    grade = _normalize_card_grade(match.group(2))
+    if (
+        grader not in EBAY_CARD_GRADER_DESCRIPTOR_VALUE_BY_NAME
+        or grade not in EBAY_CARD_GRADE_DESCRIPTOR_VALUE_BY_GRADE
+    ):
+        return None
+    return grader, grade
+
+
+def _map_mercari_label_to_ebay_card_descriptor_value(condition_ja: str) -> str:
+    label = (condition_ja or "").strip()
+    descriptor_value = MERCARI_CARD_CONDITION_DESCRIPTOR_BY_LABEL.get(label)
+    if descriptor_value:
+        return descriptor_value
+
+    logger.warning("メルカリラベル不明のためデフォルト Excellent を使用")
+    return EBAY_CARD_EXCELLENT_DESCRIPTOR_VALUE
+
+
+def map_mercari_label_to_ebay_condition_id(condition_ja: str, title: str, description: str) -> str:
+    """Return 2750 for graded cards, otherwise the ungraded Card Condition descriptor value."""
+    if _detect_graded_card(title, description):
+        return EBAY_CARD_GRADED_CONDITION_ID
+
+    return _map_mercari_label_to_ebay_card_descriptor_value(condition_ja)
+
+
+def _build_graded_card_condition_descriptors_xml(
+    title: str,
+    description: str,
+    graded: Optional[Tuple[str, str]] = None,
+) -> str:
+    if graded is None:
+        graded = _detect_graded_card(title, description)
+    if not graded:
+        return ""
+
+    grader, grade = graded
+    grader_value = EBAY_CARD_GRADER_DESCRIPTOR_VALUE_BY_NAME[grader]
+    grade_value = EBAY_CARD_GRADE_DESCRIPTOR_VALUE_BY_GRADE[grade]
+    return f"""
+    <ConditionDescriptors>
+      <ConditionDescriptor>
+        <Name>{EBAY_CARD_GRADER_DESCRIPTOR_NAME_ID}</Name>
+        <Value>{grader_value}</Value>
+      </ConditionDescriptor>
+      <ConditionDescriptor>
+        <Name>{EBAY_CARD_GRADE_DESCRIPTOR_NAME_ID}</Name>
+        <Value>{grade_value}</Value>
+      </ConditionDescriptor>
+    </ConditionDescriptors>"""
 
 
 def map_booster_box_condition_id(condition_ja: str) -> str:
@@ -668,20 +786,37 @@ def add_item_to_ebay(**kwargs) -> dict:
     # トレカ単品系は 4000+記述子を最優先（if force_cond より先。リトライの 3000 で上書きされないようにする）
     if _cid in EBAY_CARD_SINGLE_CATEGORY_IDS:
         kwargs.pop("_force_condition", None)
-        condition_id = "4000"
-        cd_val = EBAY_CARD_UNGRADED_DESCRIPTOR_VALUE
-        condition_desc_xml = f"""
+        source_title = kwargs.get("source_title") or title
+        source_description = kwargs.get("source_description") or desc
+        graded_card = _detect_graded_card(source_title, source_description)
+        if graded_card:
+            condition_id = EBAY_CARD_GRADED_CONDITION_ID
+            condition_desc_xml = _build_graded_card_condition_descriptors_xml(
+                source_title,
+                source_description,
+                graded=graded_card,
+            )
+            logger.info(
+                "  📋 eBay card: graded %s（詳細は説明文・Mercari: %s）",
+                condition_id,
+                mercari_condition_ja or "—",
+            )
+        else:
+            condition_id = EBAY_CARD_UNGRADED_CONDITION_ID
+            cd_val = _map_mercari_label_to_ebay_card_descriptor_value(mercari_condition_ja)
+            condition_desc_xml = f"""
     <ConditionDescriptors>
       <ConditionDescriptor>
-        <Name>40001</Name>
+        <Name>{EBAY_CARD_CONDITION_DESCRIPTOR_NAME_ID}</Name>
         <Value>{cd_val}</Value>
       </ConditionDescriptor>
     </ConditionDescriptors>"""
-        logger.info(
-            "  📋 eBay card: 4000 + descriptor %s（詳細は説明文・Mercari: %s）",
-            cd_val,
-            mercari_condition_ja or "—",
-        )
+            logger.info(
+                "  📋 eBay card: %s + descriptor %s（詳細は説明文・Mercari: %s）",
+                condition_id,
+                cd_val,
+                mercari_condition_ja or "—",
+            )
     elif force_cond:
         condition_id = str(force_cond).strip()
     elif _cid == "183455":
@@ -1406,6 +1541,8 @@ def run_auto_listing(
                         item_specifics=ai_data.get("item_specifics", {}),
                         dept=detected_dept,
                         mercari_condition_ja=scraped.get("condition_label_ja", ""),
+                        source_title=scraped.get("title", ""),
+                        source_description=scraped.get("description", ""),
                     )
 
                     if ebay_res["success"] and not dry_run:
