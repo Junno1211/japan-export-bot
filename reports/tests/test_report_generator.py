@@ -11,6 +11,7 @@ from reports.department_classifier import DepartmentProfile
 from reports.ebay_data_fetcher import SoldLine
 from reports.report_generator import (
     aggregate_sales_by_department,
+    aggregate_sales_by_tags,
     build_total_row,
     format_terminal_table,
     month_range_tokyo,
@@ -100,3 +101,54 @@ def test_revenue_jpy_uses_common_rules_rate() -> None:
     rows, _ = aggregate_sales_by_department(lines, _profiles(), {})
     r = rows[0]
     assert r.revenue_jpy == int(round(1.0 * EXCHANGE_RATE_JPY_PER_USD))
+
+
+def test_aggregate_sales_by_tags() -> None:
+    lines = [
+        SoldLine("o1", "1", "Shohei Ohtani BBM 2024 PSA10", 864.0, ""),
+        SoldLine("o2", "2", "One Piece Carddass Luffy Mint", 200.0, ""),
+        SoldLine("o3", "3", "Unknown item", 50.0, ""),
+    ]
+    tags = aggregate_sales_by_tags(lines)
+    chars = {r.tag: r for r in tags["character"]}
+    assert chars["Ohtani"].revenue_usd == 864.0
+    assert chars["Luffy"].count == 1
+    assert chars["(該当なし)"].revenue_usd == 50.0
+    bands = {r.tag: r for r in tags["price_band"]}
+    assert bands["<$100"].count == 1
+    assert bands["$100-$300"].count == 1
+    assert bands["$300-$1000"].count == 1
+    assert bands["$1000+"].count == 0
+
+
+def test_terminal_output_includes_tag_sections() -> None:
+    lines = [SoldLine("o1", "1", "Shohei Ohtani BBM 2024 PSA10", 864.0, "")]
+    rows, _ = aggregate_sales_by_department(lines, _profiles(), {})
+    tags = aggregate_sales_by_tags(lines)
+    txt = format_terminal_table(2026, 4, 1, 25, rows, total_row=build_total_row(rows), tag_sections=tags)
+    assert "## キャラ別" in txt
+    assert "Ohtani" in txt
+    assert "$300-$1000" in txt
+
+
+def test_markdown_report_includes_tag_sections(tmp_path) -> None:
+    lines = [SoldLine("o1", "1", "Pikachu Pokemon Carddass Near Mint", 150.0, "")]
+    rows, meta = aggregate_sales_by_department(lines, _profiles(), {})
+    tags = aggregate_sales_by_tags(lines)
+    md = tmp_path / "tags.md"
+    write_markdown_report(
+        md,
+        2026,
+        4,
+        "2026-04-01",
+        "2026-04-25 14:00",
+        rows,
+        build_total_row(rows),
+        unclassified_count=int(meta["unclassified_count"]),
+        profits_enabled=False,
+        tag_sections=tags,
+    )
+    body = md.read_text(encoding="utf-8")
+    assert "## キャラ別" in body
+    assert "| Pikachu | 150 | 1 |" in body
+    assert "## 価格帯別" in body

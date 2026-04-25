@@ -16,6 +16,7 @@ from common_rules import EXCHANGE_RATE_JPY_PER_USD, calculate_profit_usd
 
 from reports.department_classifier import DepartmentProfile, classify_title
 from reports.ebay_data_fetcher import SoldLine
+from reports.product_tagger import load_tag_dictionaries, tag_product
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,28 @@ class DepartmentSalesAgg:
     @property
     def revenue_jpy(self) -> int:
         return int(round(self.revenue_usd * EXCHANGE_RATE_JPY_PER_USD))
+
+
+@dataclass(frozen=True)
+class TagSalesAgg:
+    tag: str
+    revenue_usd: float
+    count: int
+
+
+TAG_SECTION_TITLES = {
+    "character": "キャラ別",
+    "condition": "状態別",
+    "series": "シリーズ別",
+    "price_band": "価格帯別",
+}
+
+PRICE_BAND_LABELS = {
+    "low": "<$100",
+    "mid": "$100-$300",
+    "high": "$300-$1000",
+    "premium": "$1000+",
+}
 
 
 def month_range_tokyo(now: datetime | None = None) -> tuple[datetime, datetime]:
@@ -119,6 +142,55 @@ def aggregate_sales_by_department(
     return rows, meta
 
 
+def _tag_sort_key(row: TagSalesAgg) -> tuple[int, float, str]:
+    return (1 if row.tag == "(該当なし)" else 0, -row.revenue_usd, row.tag)
+
+
+def aggregate_sales_by_tags(sold_lines: list[SoldLine]) -> dict[str, list[TagSalesAgg]]:
+    """商品タグ別に売上・件数を集計する。部署別集計とは独立した横断集計。"""
+    dictionaries = load_tag_dictionaries()
+    buckets: dict[str, dict[str, dict[str, float | int]]] = {
+        "character": {},
+        "condition": {},
+        "series": {},
+        "price_band": {},
+    }
+
+    for ln in sold_lines:
+        price = float(ln.price_usd)
+        tags = tag_product(ln.title, price, dictionaries=dictionaries)
+        for category in ("character", "condition", "series"):
+            names = tags.get(category) or ["(該当なし)"]
+            for name in names:
+                b = buckets[category].setdefault(name, {"revenue_usd": 0.0, "count": 0})
+                b["revenue_usd"] = float(b["revenue_usd"]) + price
+                b["count"] = int(b["count"]) + 1
+
+        price_names = tags.get("price_band") or ["(該当なし)"]
+        for name in price_names:
+            label = PRICE_BAND_LABELS.get(name, name)
+            b = buckets["price_band"].setdefault(label, {"revenue_usd": 0.0, "count": 0})
+            b["revenue_usd"] = float(b["revenue_usd"]) + price
+            b["count"] = int(b["count"]) + 1
+
+    for label in PRICE_BAND_LABELS.values():
+        buckets["price_band"].setdefault(label, {"revenue_usd": 0.0, "count": 0})
+
+    sections: dict[str, list[TagSalesAgg]] = {}
+    for category, data in buckets.items():
+        rows = [
+            TagSalesAgg(tag=name, revenue_usd=float(v["revenue_usd"]), count=int(v["count"]))
+            for name, v in data.items()
+        ]
+        if category == "price_band":
+            order = {label: i for i, label in enumerate(PRICE_BAND_LABELS.values())}
+            rows.sort(key=lambda r: (order.get(r.tag, 999), r.tag))
+        else:
+            rows.sort(key=_tag_sort_key)
+        sections[category] = rows
+    return sections
+
+
 def format_profit_cell(v: int | None) -> str:
     if v is None:
         return "不明"
@@ -133,6 +205,7 @@ def format_terminal_table(
     rows: list[DepartmentSalesAgg],
     *,
     total_row: DepartmentSalesAgg,
+    tag_sections: dict[str, list[TagSalesAgg]] | None = None,
 ) -> str:
     title = f"{year}年{month}月 部署別売上レポート ({day_start}日〜{day_end}日)"
     sep = "─" * 73
@@ -155,6 +228,12 @@ def format_terminal_table(
     lines_out.append(
         f"参考: 為替レート {int(EXCHANGE_RATE_JPY_PER_USD)} JPY/USD、手数料率 19.6%、最低利益基準 ¥3,000"
     )
+    if tag_sections:
+        for category in ("character", "condition", "series", "price_band"):
+            tag_rows = tag_sections.get(category) or []
+            lines_out.extend(["", f"## {TAG_SECTION_TITLES[category]}", "タグ             | 売上(USD) | 件数", "─" * 34])
+            for r in tag_rows:
+                lines_out.append(f"{r.tag:<14} | {r.revenue_usd:>9,.0f} | {r.count:>4}")
     return "\n".join(lines_out)
 
 
@@ -192,6 +271,7 @@ def write_markdown_report(
     *,
     unclassified_count: int,
     profits_enabled: bool,
+    tag_sections: dict[str, list[TagSalesAgg]] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = [
@@ -222,6 +302,20 @@ def write_markdown_report(
             tot=format_profit_cell(total_row.total_profit_jpy),
         )
     )
+    if tag_sections:
+        for category in ("character", "condition", "series", "price_band"):
+            tag_rows = tag_sections.get(category) or []
+            lines.extend(
+                [
+                    "",
+                    f"## {TAG_SECTION_TITLES[category]}",
+                    "",
+                    "| タグ | 売上(USD) | 件数 |",
+                    "|---|---:|---:|",
+                ]
+            )
+            for tr in tag_rows:
+                lines.append(f"| {tr.tag} | {tr.revenue_usd:,.0f} | {tr.count} |")
     lines.extend(
         [
             "",

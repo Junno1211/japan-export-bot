@@ -21,6 +21,7 @@ from reports.department_classifier import load_department_profiles
 from reports.ebay_data_fetcher import fetch_completed_orders
 from reports.report_generator import (
     aggregate_sales_by_department,
+    aggregate_sales_by_tags,
     build_total_row,
     format_terminal_table,
     month_range_tokyo,
@@ -47,6 +48,7 @@ def main() -> None:
 
     cost = try_load_item_cost_jpy(ROOT)
     rows, meta = aggregate_sales_by_department(lines, profiles, cost)
+    tag_sections = aggregate_sales_by_tags(lines)
     total = build_total_row(rows)
 
     y, m = start_local.year, start_local.month
@@ -54,7 +56,7 @@ def main() -> None:
     date_from = start_local.strftime("%Y-%m-%d")
     date_to = end_local.strftime("%Y-%m-%d %H:%M")
 
-    text = format_terminal_table(y, m, d0, d1, rows, total_row=total)
+    text = format_terminal_table(y, m, d0, d1, rows, total_row=total, tag_sections=tag_sections)
     print(text)
     out_path = ROOT / "reports" / "output" / f"dept_report_{y:04d}-{m:02d}.md"
     write_markdown_report(
@@ -67,6 +69,7 @@ def main() -> None:
         total,
         unclassified_count=int(meta["unclassified_count"]),
         profits_enabled=bool(meta["profits_enabled"]),
+        tag_sections=tag_sections,
     )
     print(f"レポート保存: {out_path.relative_to(ROOT)}")
 
