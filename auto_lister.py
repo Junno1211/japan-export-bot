@@ -34,6 +34,12 @@ from config import (
     MERCARI_SCRAPE_MAX_RETRIES,
     MERCARI_SCRAPE_RETRY_BASE_SEC,
 )
+from common_rules import (
+    HANDLING_DAYS,
+    PROMOTED_LISTINGS_RATE,
+    SHIPPING_METHOD,
+    TITLE_MAX_LENGTH,
+)
 from sheets_manager import (
     _get_service, read_all_items, read_active_items,
     update_item_status, append_item_to_inventory,
@@ -74,8 +80,8 @@ EBAY_CARD_UNGRADED_DESCRIPTOR_VALUE = "400010"
 
 # 説明文 Shipping 用（URL・ドル額は書かない）。Gemini プロンプトと improper フォールバックで揃える
 LISTING_SHIPPING_NOTE_HTML = (
-    "<h2>Shipping</h2><p>Ships from Japan within <strong>10 business days</strong> of cleared payment. "
-    "Shipped via <strong>FedEx</strong> with <strong>tracking</strong>—the tracking number is added on eBay when the label is created. "
+    f"<h2>Shipping</h2><p>Ships from Japan within <strong>{HANDLING_DAYS} business days</strong> of cleared payment. "
+    f"Shipped via <strong>{SHIPPING_METHOD}</strong> with <strong>tracking</strong>—the tracking number is added on eBay when the label is created. "
     "International shipping may be billed through eBay’s program (e.g. SpeedPAK) for customs handling; the amount at checkout reflects your address.</p>"
 )
 
@@ -103,7 +109,7 @@ def notify_slack(text: str) -> None:
 FVF_RATE = 0.1325          # Final Value Fee
 INTL_FEE_RATE = 0.0135     # 海外手数料
 PAYONEER_RATE = 0.02        # Payoneer手数料
-DEFAULT_PROMOTED_RATE = 0.03 # Promoted Listings率
+DEFAULT_PROMOTED_RATE = PROMOTED_LISTINGS_RATE  # Promoted Listings率（common_rules と同一）
 SALES_TAX_RATE = 0.10       # Sales Tax (10%)
 
 
@@ -194,7 +200,7 @@ def detect_department(title: str, desc: str = "") -> Optional[dict]:
 
 
 # Gemini 出品文（プロンプト本体。部署の ai_prompt_hint / ebay_keywords が USER CONTENT に追記される）
-_LISTING_AI_QUALITY_RULES = """
+_LISTING_AI_QUALITY_RULES_RAW = """
 ## ROLE
 You are an expert eBay listing copywriter for Japanese collectibles and hobby items sold to US and international buyers. You optimize for eBay search (Cassini) and buyer trust, without inventing facts.
 
@@ -258,6 +264,17 @@ When a Mercari condition label is provided, it is **authoritative** for how "nic
 ## OUTPUT
 Return **only** valid JSON with keys: "title", "description_html", "category_id", "item_specifics" (object).
 """
+
+_LISTING_AI_QUALITY_RULES = (
+    _LISTING_AI_QUALITY_RULES_RAW.replace(
+        "Max **80 characters**", f"Max **{TITLE_MAX_LENGTH} characters**"
+    )
+    .replace(
+        "<strong>10 business days</strong>",
+        f"<strong>{HANDLING_DAYS} business days</strong>",
+    )
+    .replace("(c) <strong>FedEx</strong>", f"(c) <strong>{SHIPPING_METHOD}</strong>")
+)
 
 
 def _cdata_safe(text: str, max_len: int = 980) -> str:
@@ -478,7 +495,7 @@ def sanitize_item_specifics_values(specs: dict) -> dict:
     return out
 
 
-def latinish_title_fallback(title: str, max_len: int = 80) -> str:
+def latinish_title_fallback(title: str, max_len: int = TITLE_MAX_LENGTH) -> str:
     """improper 再試行用: 記号を減らし英数字中心に（空なら固定文言）"""
     t = strip_listing_emoji(title or "")
     for banned in EBAY_TITLE_BANNED_WORDS:
@@ -499,12 +516,12 @@ def sanitize_ai_output(ai_data: dict, condition_ja: str = "") -> dict:
     """Gemini AI出力をeBayポリシー準拠にサニタイズする"""
     import re as _re
 
-    # 1. タイトル: 絵文字・禁止ワード除去 & 80文字制限
+    # 1. タイトル: 絵文字・禁止ワード除去 & TITLE_MAX_LENGTH 文字制限
     title = strip_listing_emoji(ai_data.get("title", ""))
     title = _scrub_overpositive_condition_copy(title, condition_ja)
     for banned in EBAY_TITLE_BANNED_WORDS:
         title = _re.sub(r'\b' + banned + r'\b', '', title, flags=_re.IGNORECASE)
-    title = _re.sub(r'\s+', ' ', title).strip()[:80]
+    title = _re.sub(r'\s+', ' ', title).strip()[:TITLE_MAX_LENGTH]
     ai_data["title"] = title
 
     # 2. 商品説明: 危険なHTML・外部URL・禁止ワードを完全除去
@@ -555,7 +572,7 @@ def add_item_to_ebay(**kwargs) -> dict:
         "Content-Type": "text/xml",
     }
     # VALID_CATEGORIES is defined at module level
-    title = kwargs.get("title", "")[:80]
+    title = kwargs.get("title", "")[:TITLE_MAX_LENGTH]
     desc = kwargs.get("desc_html", "")
     price = kwargs.get("price_usd", 0)
     cat_id = str(kwargs.get("category_id", "183454")).strip()
@@ -689,7 +706,7 @@ def add_item_to_ebay(**kwargs) -> dict:
     <Country>JP</Country>
     <Location>Japan</Location>
     <Currency>USD</Currency>
-    <DispatchTimeMax>10</DispatchTimeMax>
+    <DispatchTimeMax>{HANDLING_DAYS}</DispatchTimeMax>
     <ListingDuration>GTC</ListingDuration>
     <ListingType>FixedPriceItem</ListingType>
     <Quantity>1</Quantity>
@@ -761,7 +778,7 @@ def add_item_to_ebay(**kwargs) -> dict:
                     t = strip_listing_emoji(kwargs.get("title", ""))
                     for banned in EBAY_TITLE_BANNED_WORDS:
                         t = re.sub(r"\b" + banned + r"\b", "", t, flags=re.IGNORECASE)
-                    t = re.sub(r"\s+", " ", t).strip()[:80]
+                    t = re.sub(r"\s+", " ", t).strip()[:TITLE_MAX_LENGTH]
                     kwargs["title"] = t if t else "Japanese Collectible Card"
                     d = kwargs.get("desc_html", "")
                     d = strip_listing_emoji(d)
@@ -803,7 +820,7 @@ def add_item_to_ebay(**kwargs) -> dict:
                     kwargs["title"] = "Japanese Trading Card Collectible"
                     kwargs["desc_html"] = (
                         "<p>Japanese collectible. Photos show the item. "
-                        "Ships from Japan within 10 business days via FedEx with tracking on eBay. "
+                        f"Ships from Japan within {HANDLING_DAYS} business days via {SHIPPING_METHOD} with tracking on eBay. "
                         "International shipping rate at checkout may include eBay program handling.</p>"
                     )
                     kwargs["item_specifics"] = {
@@ -872,7 +889,7 @@ def add_item_to_ebay(**kwargs) -> dict:
         if "violation" in errs_lower and "improper" not in errs_lower:
             import re as _re2
             logger.warning("  🔄 ポリシー violation → タイトル・説明文を安全版でリトライ")
-            clean_title = _re2.sub(r"[^\w\s\-/.,()#]", "", kwargs.get("title", "")).strip()[:80]
+            clean_title = _re2.sub(r"[^\w\s\-/.,()#]", "", kwargs.get("title", "")).strip()[:TITLE_MAX_LENGTH]
             kwargs["title"] = clean_title or "Japanese Collectible"
             kwargs["desc_html"] = (
                 "<p>Authentic Japanese collectible. Please see photos for condition details.</p>"
@@ -1363,7 +1380,7 @@ def run_auto_listing(
                     )
                     if not sv_result["approved"]:
                         reason = " / ".join(sv_result["violations"])
-                        update_item_status(row_num, f"🚫 監視ブロック: {reason[:80]}", s_name)
+                        update_item_status(row_num, f"🚫 監視ブロック: {reason[:TITLE_MAX_LENGTH]}", s_name)
                         fail_count += 1
                         continue
 

@@ -14,6 +14,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from common_rules import TITLE_MAX_LENGTH, validate_title_length
 from config import (
     SPREADSHEET_ID, SHEET_NAME, EXCHANGE_RATE,
     SLACK_WEBHOOK_URL, SLACK_WEBHOOK_URL_ORDERS
@@ -98,6 +99,7 @@ def validate_listing(
     description_html: str,
     is_priority: bool = False,
     existing_urls: set = None,
+    manual_sheet: bool = False,
 ) -> dict:
     """
     出品前の全項目検証。
@@ -138,24 +140,25 @@ def validate_listing(
         domain = u.split("/")[2] if "//" in u else u.split("/")[0]
         domain = domain.lower().replace("www.", "")
         if not any(domain.endswith(allowed) for allowed in ALLOWED_URL_DOMAINS):
-            violations.append(f"説明文に外部URL検出（eBayポリシー違反）: {u[:80]}")
+            violations.append(f"説明文に外部URL検出（eBayポリシー違反）: {u[:TITLE_MAX_LENGTH]}")
 
     # --- 6. オークション商品ブロック（経営破綻防止） ---
     # 注意: 「入札」は説明文に自然に出現するため使わない（偽陽性防止）
     title_lower = title.lower()
-    auction_title_signals = ["オークション", "auction"]
-    for signal in auction_title_signals:
-        if signal in title_lower:
-            violations.append(f"オークション商品検出(タイトル): '{signal}'")
+    if not manual_sheet:
+        auction_title_signals = ["オークション", "auction"]
+        for signal in auction_title_signals:
+            if signal in title_lower:
+                violations.append(f"オークション商品検出(タイトル): '{signal}'")
 
-    # --- 7. NGキーワード ---
-    for ng in NG_KEYWORDS:
-        if ng in title_lower:
-            violations.append(f"NGキーワード検出: '{ng}' in title")
+        # --- 7. NGキーワード ---
+        for ng in NG_KEYWORDS:
+            if ng in title_lower:
+                violations.append(f"NGキーワード検出: '{ng}' in title")
 
     # --- 7. タイトル長 ---
-    if len(title) > 80:
-        warnings.append(f"タイトル80文字超過: {len(title)}文字")
+    if not validate_title_length(title):
+        warnings.append(f"タイトル{TITLE_MAX_LENGTH}文字超過: {len(title)}文字")
 
     # --- 8. 画像なし出品の防止（呼び出し側で画像URLを渡す場合） ---
     # ※画像チェックは呼び出し側で行う

@@ -2,6 +2,7 @@ import requests
 import xml.etree.ElementTree as ET
 import logging
 import sys
+from common_rules import TITLE_MAX_LENGTH
 from config import EBAY_APP_ID, EBAY_DEV_ID, EBAY_CERT_ID, EBAY_AUTH_TOKEN, EBAY_SITE_ID, EBAY_ENV
 
 logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
@@ -215,7 +216,7 @@ def add_item(title: str, desc_html: str, price_usd: float, image_urls: list, cat
     <eBayAuthToken>{EBAY_AUTH_TOKEN}</eBayAuthToken>
   </RequesterCredentials>
   <Item>
-    <Title><![CDATA[{title[:80]}]]></Title>
+    <Title><![CDATA[{title[:TITLE_MAX_LENGTH]}]]></Title>
     <Description><![CDATA[{desc_html}]]></Description>
     <PrimaryCategory>
       <CategoryID>{category_id}</CategoryID>
