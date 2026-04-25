@@ -111,16 +111,16 @@ def build_slack_message(results: list[PipelineStepResult], report_path: Path) ->
 
 def send_slack_message(webhook_url: str, text: str) -> bool:
     payload = json.dumps({"text": text}, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
-        webhook_url,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            webhook_url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=10) as resp:
             return 200 <= int(resp.status) < 300
-    except (urllib.error.URLError, TimeoutError, OSError):
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return False
 
 

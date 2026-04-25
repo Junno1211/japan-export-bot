@@ -100,6 +100,10 @@ def test_send_slack_message_posts_payload() -> None:
     assert b"hello" in req.data
 
 
+def test_send_slack_message_invalid_url_returns_false() -> None:
+    assert send_slack_message("not-a-url", "hello") is False
+
+
 def test_main_no_slack_returns_failure_when_any_step_fails(tmp_path: Path, capsys) -> None:
     results = [
         PipelineStepResult("A", ["a"], 0, "ok", ""),

@@ -11,7 +11,9 @@ from reports.capital_allocation import (
     format_allocation_markdown,
     revenue_jpy,
 )
+from reports.generate_allocation_report import fetch_department_history
 from reports.intelligence import DepartmentSummaryRow, TagRankingRow
+from reports.ebay_data_fetcher import SoldLine
 from reports.market_signals import ExchangeRateSignal, MarketSignalsReport, SeasonalitySignal, TrendSignal
 
 
@@ -84,6 +86,16 @@ def test_decide_action_exit_after_three_weak_months() -> None:
     assert action == "撤退候補"
 
 
+def test_decide_action_two_weak_months_not_exit_yet() -> None:
+    row = DepartmentSummaryRow("Weak", 1, 10.0, 10.0)
+    history = [
+        DepartmentMonthSnapshot("2026-04", 10_000, 1),
+        DepartmentMonthSnapshot("2026-03", 12_000, 1),
+    ]
+    action, _ = decide_action(row, history=history)
+    assert action == "縮小"
+
+
 def test_decide_action_data_insufficient_for_small_one_month() -> None:
     row = DepartmentSummaryRow("Tiny", 1, 50.0, 50.0)
     action, reason = decide_action(row, history=[])
@@ -121,3 +133,22 @@ def test_format_allocation_markdown() -> None:
 def test_empty_allocation_report() -> None:
     body = format_allocation_markdown(build_allocation_report([], month_label="2026年4月"))
     assert "(データなし)" in body
+
+
+def test_fetch_department_history_includes_current_and_previous_month(monkeypatch) -> None:
+    from reports.department_classifier import DepartmentProfile
+
+    profiles = [DepartmentProfile("ohtani", "Ohtani", ("ohtani",), ())]
+    current_rows = [DepartmentSummaryRow("Ohtani", 1, 100.0, 100.0)]
+
+    def fake_fetch(_start, _end):
+        return [SoldLine("p", "1", "Ohtani card", 50.0, "")]
+
+    monkeypatch.setattr("reports.generate_allocation_report.fetch_completed_orders", fake_fetch)
+    history = fetch_department_history(
+        current_start_local=__import__("datetime").datetime(2026, 4, 1),
+        current_rows=current_rows,
+        profiles=profiles,
+        months=2,
+    )
+    assert [s.month for s in history["Ohtani"]] == ["2026-04", "2026-03"]
