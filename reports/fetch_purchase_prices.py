@@ -35,7 +35,7 @@ def load_inventory_spreadsheet_id() -> str:
     return SPREADSHEET_ID
 
 
-INVENTORY_SHEET_NAME = "在庫管理表1"
+INVENTORY_SHEET_NAME = "在庫管理表１"  # タブ名は全角「１」
 PURCHASE_HEADER = "仕入価格(JPY)"
 # A=ItemID, B=商品名, C=仕入先, D=URL, E=在庫状況, F=Status, G=在庫切れ時の対応 → H=仕入価格(既定)
 MIN_PURCHASE_COL_INDEX = 7  # 0-based → H 列
@@ -264,6 +264,7 @@ def run(
     sleep_fn: Callable[[float], None] | None = None,
     get_service: Callable[[], Any] | None = None,
     spreadsheet_id: str | None = None,
+    sheet_name: str | None = None,
 ) -> None:
     _sleep = sleep_fn or time.sleep
     if get_service is None:
@@ -272,9 +273,10 @@ def run(
         get_service = _get_service
     service = get_service()
     ss_id = spreadsheet_id if spreadsheet_id is not None else load_inventory_spreadsheet_id()
+    sheet_tab = sheet_name if sheet_name is not None else INVENTORY_SHEET_NAME
 
-    logger.info("在庫管理表 %s を読み込み中...", INVENTORY_SHEET_NAME)
-    header = read_header_row(service, ss_id, INVENTORY_SHEET_NAME)
+    logger.info("在庫管理表 %s を読み込み中...", sheet_tab)
+    header = read_header_row(service, ss_id, sheet_tab)
     while len(header) < MIN_PURCHASE_COL_INDEX + 1:
         header.append("")
 
@@ -286,7 +288,7 @@ def run(
             update_cell(
                 service,
                 ss_id,
-                INVENTORY_SHEET_NAME,
+                sheet_tab,
                 1,
                 pidx,
                 PURCHASE_HEADER,
@@ -297,7 +299,7 @@ def run(
 
     last_col_idx = max(pidx, MIN_PURCHASE_COL_INDEX, len(header) - 1)
     last_letter = col_index_to_a1(last_col_idx)
-    rows = read_data_rows(service, ss_id, INVENTORY_SHEET_NAME, last_letter)
+    rows = read_data_rows(service, ss_id, sheet_tab, last_letter)
 
     pending: list[tuple[int, str, str]] = []  # (sheet_row, item_id, url)
     for i, row in enumerate(rows):
@@ -332,7 +334,7 @@ def run(
             update_cell(
                 service,
                 ss_id,
-                INVENTORY_SHEET_NAME,
+                sheet_tab,
                 sheet_row,
                 pidx,
                 str(int(price)),
@@ -374,11 +376,17 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="ロックを取得しない（Mac ローカル試験用。本番 VPS では付けないこと）",
     )
+    ap.add_argument(
+        "--sheet-name",
+        default=None,
+        metavar="NAME",
+        help=f"シートタブ名（未指定時: {INVENTORY_SHEET_NAME}）",
+    )
     args = ap.parse_args(argv)
 
     try:
         with MercariAccessLock(ignore=args.ignore_lock):
-            run(dry_run=args.dry_run, limit=args.limit)
+            run(dry_run=args.dry_run, limit=args.limit, sheet_name=args.sheet_name)
     except RuntimeError as e:
         logger.error("%s", e)
         sys.exit(1)

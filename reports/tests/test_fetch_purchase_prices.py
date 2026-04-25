@@ -13,6 +13,7 @@ from reports.fetch_purchase_prices import (
     col_index_to_a1,
     compute_new_purchase_column_index,
     find_purchase_column_index,
+    main,
     run,
 )
 
@@ -101,6 +102,10 @@ def test_run_dry_run_passes_dry_run_to_update_cell(
         spreadsheet_id="test_spreadsheet_id_no_config",
     )
 
+    assert mock_header.called
+    assert mock_header.call_args[0][2] == "在庫管理表１"
+    assert mock_rows.called
+    assert mock_rows.call_args[0][2] == "在庫管理表１"
     assert mock_update_cell.called
     for c in mock_update_cell.call_args_list:
         assert c.kwargs.get("dry_run") is True
@@ -125,6 +130,7 @@ def test_run_adds_header_when_missing(
         get_service=lambda: mock_svc,
         spreadsheet_id="test_spreadsheet_id_no_config",
     )
+    assert mock_header.call_args[0][2] == "在庫管理表１"
     mock_update_cell.assert_called()
     first = mock_update_cell.call_args_list[0]
     args, kwargs = first[0], first[1]
@@ -136,3 +142,23 @@ def test_run_adds_header_when_missing(
 def test_mercari_access_lock_ignore() -> None:
     with MercariAccessLock(path="/tmp/mercari_access_lock_test_ignore", ignore=True):
         pass
+
+
+@patch("reports.fetch_purchase_prices.MercariAccessLock")
+@patch("reports.fetch_purchase_prices.run")
+def test_cli_sheet_name_passed_to_run(mock_run: MagicMock, mock_lock_cls: MagicMock) -> None:
+    mock_lock_cls.return_value.__enter__.return_value = None
+    mock_lock_cls.return_value.__exit__.return_value = None
+    main(["--sheet-name", "在庫管理表２", "--dry-run"])
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs["sheet_name"] == "在庫管理表２"
+
+
+@patch("reports.fetch_purchase_prices.MercariAccessLock")
+@patch("reports.fetch_purchase_prices.run")
+def test_cli_sheet_name_omitted_is_none(mock_run: MagicMock, mock_lock_cls: MagicMock) -> None:
+    mock_lock_cls.return_value.__enter__.return_value = None
+    mock_lock_cls.return_value.__exit__.return_value = None
+    main(["--dry-run"])
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs["sheet_name"] is None
