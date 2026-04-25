@@ -65,3 +65,6 @@ backups/
 
 # PDF 中間生成（pandoc HTML）
 docs/.pdf-build/
+
+# レポート出力（部署別売上など）
+reports/output/
