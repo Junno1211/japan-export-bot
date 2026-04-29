@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 import fcntl
+import json
 import logging
 import os
 import re
@@ -26,7 +27,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any
 from urllib.parse import urlparse
 
@@ -77,6 +79,93 @@ def notify_slack(text: str) -> None:
         requests.post(SLACK_WEBHOOK_URL_ORDERS, json={"text": text}, timeout=10)
     except Exception as e:
         logger.warning("Slack通知失敗: %s", e)
+
+
+def _merge_daily_oos_history(
+    hist: Any, day_iso: str, oos_total: int
+) -> list[dict[str, Any]]:
+    """v3_heartbeat_state の日次 OOS 合計履歴をマージ（同一日は max）。"""
+    rows: list[dict[str, Any]] = []
+    if isinstance(hist, list):
+        for item in hist:
+            if isinstance(item, dict) and item.get("d"):
+                rows.append(
+                    {"d": str(item["d"]), "oos": int(item.get("oos") or 0)}
+                )
+    merged_today = False
+    for row in rows:
+        if row["d"] == day_iso:
+            row["oos"] = max(row["oos"], oos_total)
+            merged_today = True
+            break
+    if not merged_today:
+        rows.append({"d": day_iso, "oos": oos_total})
+    rows.sort(key=lambda x: x["d"])
+    return rows[-62:]
+
+
+def _seven_consecutive_days_all_oos_zero(
+    hist: list[dict[str, Any]], end: date
+) -> bool:
+    """end を含む直近7暦日がすべて daily_oos に存在し、いずれも OOS 合計=0。"""
+    m = {str(row["d"]): int(row.get("oos", 0)) for row in hist}
+    for i in range(7):
+        d = end - timedelta(days=i)
+        key = d.isoformat()
+        if key not in m:
+            return False
+        if m[key] != 0:
+            return False
+    return True
+
+
+def _self_check_and_alert(counts: dict[str, int], total: int, txt_path: str) -> None:
+    """巡回完了後のセルフチェック。異常パターンなら Slack（ORDERS webhook）へ警告1通。"""
+    oos_total = counts["oos_sold"] + counts["oos_auction"] + counts["oos_deleted"]
+    dual = counts.get("active_dual_reject", 0)
+    timeout_n = counts["active_timeout"]
+    exception_n = counts["active_exception"]
+    html_fail = counts["active_empty_html"]
+    triggers: list[str] = []
+
+    if total >= 20 and oos_total == 0 and dual == 0:
+        triggers.append(
+            "条件A: 全件active・不一致ゼロ。判定ロジック異常の可能性。4/25と同パターン"
+        )
+    if total >= 10 and total > 0 and (dual / float(total)) >= 0.20:
+        triggers.append("条件B: 二系統不一致が20%超")
+    env_n = timeout_n + exception_n + html_fail
+    if total >= 10 and total > 0 and (env_n / float(total)) >= 0.10:
+        triggers.append("条件C: 環境エラー10%超")
+
+    state_path = os.path.join(ROOT, "logs", "v3_heartbeat_state.json")
+    if os.path.isfile(state_path):
+        try:
+            with open(state_path, encoding="utf-8") as fp:
+                prev = json.load(fp)
+            tz = ZoneInfo("Asia/Tokyo")
+            day_iso = datetime.now(tz).date().isoformat()
+            merged = _merge_daily_oos_history(
+                prev.get("daily_oos"), day_iso, oos_total
+            )
+            end_d = datetime.now(tz).date()
+            if _seven_consecutive_days_all_oos_zero(merged, end_d):
+                triggers.append("条件D: OOS化が7日連続ゼロ")
+        except Exception as e:
+            logger.warning("v3 self-check: v3_heartbeat_state 読込失敗: %s", e)
+
+    if not triggers:
+        return
+
+    cond = " | ".join(triggers)
+    lines = [
+        "🚨 inventory_v3 セルフチェック警告",
+        f"- 検出条件: {cond}",
+        f"- 内訳: 総対象={total} / OOS={oos_total} / dual_reject={dual} / "
+        f"timeout={timeout_n} / exception={exception_n} / html_fail={html_fail}",
+        f"- レポート: {txt_path}",
+    ]
+    notify_slack("\n".join(lines))
 
 
 def _slack_v3_cycle_done(
@@ -622,6 +711,15 @@ def run_inventory_check_v3(
                                         dual_note,
                                     )
                                     action_taken = "MAINTAINED_DUAL_REJECT"
+                                    detail_rows.append(
+                                        {
+                                            "ebay_item_id": ebay_id,
+                                            "mercari_url": murl,
+                                            "verdict": verdict,
+                                            "reason": dual_note or reason,
+                                            "action_taken": action_taken,
+                                        }
+                                    )
                                     continue
                                 assert dual_ok
                                 ok_oos = _mark_oos_v3(
@@ -651,6 +749,15 @@ def run_inventory_check_v3(
                                         dual_note,
                                     )
                                     action_taken = "MAINTAINED_DUAL_REJECT"
+                                    detail_rows.append(
+                                        {
+                                            "ebay_item_id": ebay_id,
+                                            "mercari_url": murl,
+                                            "verdict": verdict,
+                                            "reason": dual_note or reason,
+                                            "action_taken": action_taken,
+                                        }
+                                    )
                                     continue
                                 assert dual_ok
                                 ok_oos = _mark_oos_v3(
@@ -680,6 +787,15 @@ def run_inventory_check_v3(
                                         dual_note,
                                     )
                                     action_taken = "MAINTAINED_DUAL_REJECT"
+                                    detail_rows.append(
+                                        {
+                                            "ebay_item_id": ebay_id,
+                                            "mercari_url": murl,
+                                            "verdict": verdict,
+                                            "reason": dual_note or reason,
+                                            "action_taken": action_taken,
+                                        }
+                                    )
                                     continue
                                 assert dual_ok
                                 ok_oos = _mark_oos_v3(
@@ -825,10 +941,24 @@ def run_inventory_check_v3(
                 w.writerow(dr)
         logger.info("inventory_v3: 報告書 TXT=%s CSV=%s", txt_path, csv_path)
 
-        try:
-            import json
+        state_path = os.path.join(ROOT, "logs", "v3_heartbeat_state.json")
+        prev_state: dict[str, Any] = {}
+        if os.path.isfile(state_path):
+            try:
+                with open(state_path, encoding="utf-8") as sfp:
+                    prev_state = json.load(sfp)
+            except Exception as ex:
+                logger.warning("v3 heartbeat state read failed: %s", ex)
+                prev_state = {}
+        _tz_jst = ZoneInfo("Asia/Tokyo")
+        day_jst_iso = datetime.now(_tz_jst).date().isoformat()
+        daily_oos = _merge_daily_oos_history(
+            prev_state.get("daily_oos"), day_jst_iso, oos_total
+        )
 
-            state_path = os.path.join(ROOT, "logs", "v3_heartbeat_state.json")
+        _self_check_and_alert(counts, total, txt_path)
+
+        try:
             with open(state_path, "w", encoding="utf-8") as sfp:
                 json.dump(
                     {
@@ -836,6 +966,7 @@ def run_inventory_check_v3(
                         "elapsed_sec": elapsed,
                         "total_targets": total,
                         "counts": dict(counts),
+                        "daily_oos": daily_oos,
                     },
                     sfp,
                     ensure_ascii=False,
