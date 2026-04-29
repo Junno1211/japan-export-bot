@@ -503,6 +503,84 @@ def ai_analyze(
     return {}
 
 
+_TITLE_EN_TRANSLATE_RULES = """You translate a Japanese marketplace listing title into a concise US English eBay title.
+Output ONLY valid JSON: {{"title":"..."}}.
+
+Rules:
+- Max {max_chars} characters for "title".
+- Use ONLY facts present in the Japanese title; do not invent players, sets, grades, or years.
+- Natural US English; put the strongest search terms first (product type, brand/set, player/character names as written in Japanese romaji or standard English spelling when obvious from context).
+- If the source clearly says sealed/unopened 未開封, you may use "Sealed" in the title.
+- Optional: end with one honest condition tag in square brackets: [New] [NM] [LP] [Good] [READ] — use [READ] if condition is unclear.
+- No URLs, no prices, no ALL CAPS spam, no marketplace names (Mercari, etc.).
+"""
+
+
+def gemini_translate_title_en(
+    title_ja: str,
+    *,
+    condition_ja: str = "",
+    max_chars: int = TITLE_MAX_LENGTH,
+) -> str:
+    """
+    improper リトライ等でフル JSON 出品が使えないとき、題名だけ短く英訳する。
+    latinish_title_fallback は翻訳ではなく記号フィルタのため、日本語ソースでは不十分になり得る。
+    """
+    title_ja = (title_ja or "").strip()
+    if not title_ja:
+        return ""
+    if not gemini_breaker.can_proceed():
+        logger.warning("[Gemini] Circuit breaker OPEN — skip title EN translate")
+        return ""
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    cond_line = ""
+    if (condition_ja or "").strip():
+        cond_line = f"\nMercari condition label (for bracket tag only): {condition_ja.strip()}\n"
+    user_text = (
+        _TITLE_EN_TRANSLATE_RULES.format(max_chars=max_chars).strip()
+        + "\n\nJapanese title to translate:\n"
+        + title_ja[:2000]
+        + cond_line
+    )
+    payload = {
+        "contents": [{"parts": [{"text": user_text}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.1,
+            "topP": 0.8,
+            "maxOutputTokens": 300,
+        },
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=45)
+        if resp.status_code != 200:
+            logger.warning(
+                "title EN translate HTTP %s: %s",
+                resp.status_code,
+                (resp.text or "")[:200],
+            )
+            gemini_breaker.record_failure()
+            return ""
+        data = resp.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        obj = json.loads(text)
+        t = strip_listing_emoji((obj.get("title") or "").strip())
+        t = _scrub_overpositive_condition_copy(t, (condition_ja or "").strip())
+        for banned in EBAY_TITLE_BANNED_WORDS:
+            t = re.sub(r"\b" + banned + r"\b", "", t, flags=re.IGNORECASE)
+        t = re.sub(r"\s+", " ", t).strip()[:max_chars]
+        if t:
+            gemini_breaker.record_success()
+        else:
+            gemini_breaker.record_failure()
+        return t
+    except Exception as e:
+        logger.warning("gemini_translate_title_en failed: %s", e)
+        gemini_breaker.record_failure()
+        return ""
+
+
 # eBayタイトル禁止ワード（ポリシー違反で即拒否される）
 EBAY_TITLE_BANNED_WORDS = [
     "damaged", "broken", "junk", "defective", "fake", "replica", "counterfeit",
@@ -657,6 +735,12 @@ def _improper_words_final_title(kwargs: dict, *, preserved_specifics: dict) -> s
     t_last = latinish_title_fallback(src) if src else ""
     if len(t_last) >= 10 and t_last not in _IMPROPER_GENERIC_TITLES:
         return t_last[:TITLE_MAX_LENGTH]
+    t_en = gemini_translate_title_en(
+        src,
+        condition_ja=(kwargs.get("mercari_condition_ja") or ""),
+    )
+    if len(t_en) >= 12 and t_en not in _IMPROPER_GENERIC_TITLES:
+        return t_en[:TITLE_MAX_LENGTH]
     return "Japanese Trading Card Collectible"[:TITLE_MAX_LENGTH]
 
 
@@ -944,6 +1028,11 @@ def add_item_to_ebay(**kwargs) -> dict:
                     for banned in EBAY_TITLE_BANNED_WORDS:
                         t = re.sub(r"\b" + banned + r"\b", "", t, flags=re.IGNORECASE)
                     t = re.sub(r"\s+", " ", t).strip()[:TITLE_MAX_LENGTH]
+                    if not t:
+                        t = gemini_translate_title_en(
+                            (kwargs.get("source_title") or "").strip(),
+                            condition_ja=kwargs.get("mercari_condition_ja") or "",
+                        )
                     if not t:
                         t = latinish_title_fallback(
                             (kwargs.get("source_title") or "").strip()
