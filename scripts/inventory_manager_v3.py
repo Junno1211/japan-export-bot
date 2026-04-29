@@ -157,12 +157,24 @@ def _self_check_and_alert(counts: dict[str, int], total: int, txt_path: str) -> 
     if not triggers:
         return
 
+    tz = ZoneInfo("Asia/Tokyo")
+    now_jst = datetime.now(tz).strftime("%Y-%m-%d %H:%M")
+    active_indet = (
+        counts["active_timeout"]
+        + counts["active_exception"]
+        + counts["active_empty_html"]
+        + counts["active_other"]
+        + counts.get("active_dual_reject", 0)
+    )
+    active_total = counts["active_in_stock"] + active_indet
+
     cond = " | ".join(triggers)
     lines = [
         "🚨 inventory_v3 セルフチェック警告",
         f"- 検出条件: {cond}",
         f"- 内訳: 総対象={total} / OOS={oos_total} / dual_reject={dual} / "
-        f"timeout={timeout_n} / exception={exception_n} / html_fail={html_fail}",
+        f"timeout={timeout_n} / Active={active_total}",
+        f"- 時刻: {now_jst} JST",
         f"- レポート: {txt_path}",
     ]
     notify_slack("\n".join(lines))
