@@ -714,10 +714,7 @@ _IMPROPER_GENERIC_TITLES = frozenset(
 
 
 def _improper_words_final_title(kwargs: dict, *, preserved_specifics: dict) -> str:
-    """
-    eBay improper 3 回目: AI タイトルが使えないとき、メルカリ原文 + Item Specifics から
-    可能な限り具体的な題名を再構成する（従来の固定「Japanese Trading Card Collectible」より優先）。
-    """
+    """eBay improper 3 回目用に題名を組む。ダメなら空文字（汎用ゴミ題名は返さない）。"""
     src = (kwargs.get("source_title") or "").strip()
     sp = dict(preserved_specifics or {})
     prefix: list[str] = []
@@ -741,7 +738,7 @@ def _improper_words_final_title(kwargs: dict, *, preserved_specifics: dict) -> s
     )
     if len(t_en) >= 12 and t_en not in _IMPROPER_GENERIC_TITLES:
         return t_en[:TITLE_MAX_LENGTH]
-    return "Japanese Trading Card Collectible"[:TITLE_MAX_LENGTH]
+    return ""
 
 
 def sanitize_ai_output(ai_data: dict, condition_ja: str = "") -> dict:
@@ -1037,7 +1034,7 @@ def add_item_to_ebay(**kwargs) -> dict:
                         t = latinish_title_fallback(
                             (kwargs.get("source_title") or "").strip()
                         )
-                    kwargs["title"] = t if t else "Japanese Collectible Card"
+                    kwargs["title"] = (t or "").strip()
                     d = kwargs.get("desc_html", "")
                     d = strip_listing_emoji(d)
                     for banned in EBAY_DESC_BANNED_WORDS:
@@ -1099,6 +1096,18 @@ def add_item_to_ebay(**kwargs) -> dict:
                         c = scrub_ebay_fragment(str(_card))
                         if c:
                             kwargs["item_specifics"]["Card Name"] = c[:65]
+                tit_chk = (kwargs.get("title") or "").strip()
+                if not tit_chk or tit_chk in _IMPROPER_GENERIC_TITLES:
+                    logger.error(
+                        "  eBay improper リトライ: 汎用・空の題名では出品しない（中止）"
+                    )
+                    ebay_breaker.record_failure()
+                    return {
+                        "success": False,
+                        "errors": [
+                            "ebay_improper_refused_empty_or_generic_title",
+                        ],
+                    }
                 logger.warning(
                     "  🔄 improper words → 安全化リトライ (pass %s/3)",
                     kwargs["_ebay_improper_scrub"],
