@@ -630,6 +630,36 @@ def latinish_title_fallback(title: str, max_len: int = TITLE_MAX_LENGTH) -> str:
     return s if s else "Japanese Collectible Card"
 
 
+_IMPROPER_GENERIC_TITLES = frozenset(
+    {"Japanese Collectible Card", "Japanese Trading Card Collectible"}
+)
+
+
+def _improper_words_final_title(kwargs: dict, *, preserved_specifics: dict) -> str:
+    """
+    eBay improper 3 回目: AI タイトルが使えないとき、メルカリ原文 + Item Specifics から
+    可能な限り具体的な題名を再構成する（従来の固定「Japanese Trading Card Collectible」より優先）。
+    """
+    src = (kwargs.get("source_title") or "").strip()
+    sp = dict(preserved_specifics or {})
+    prefix: list[str] = []
+    for key in ("Card Name", "Game", "Character", "Set"):
+        v = sp.get(key)
+        if v and str(v).strip():
+            prefix.append(str(v).strip())
+    combined = f"{' '.join(prefix)} {src}".strip()
+    for candidate in (combined, src, " ".join(prefix)):
+        if not (candidate or "").strip():
+            continue
+        t = latinish_title_fallback(candidate)
+        if len(t) >= 14 and t not in _IMPROPER_GENERIC_TITLES:
+            return t[:TITLE_MAX_LENGTH]
+    t_last = latinish_title_fallback(src) if src else ""
+    if len(t_last) >= 10 and t_last not in _IMPROPER_GENERIC_TITLES:
+        return t_last[:TITLE_MAX_LENGTH]
+    return "Japanese Trading Card Collectible"[:TITLE_MAX_LENGTH]
+
+
 def sanitize_ai_output(ai_data: dict, condition_ja: str = "") -> dict:
     """Gemini AI出力をeBayポリシー準拠にサニタイズする"""
     import re as _re
@@ -914,6 +944,10 @@ def add_item_to_ebay(**kwargs) -> dict:
                     for banned in EBAY_TITLE_BANNED_WORDS:
                         t = re.sub(r"\b" + banned + r"\b", "", t, flags=re.IGNORECASE)
                     t = re.sub(r"\s+", " ", t).strip()[:TITLE_MAX_LENGTH]
+                    if not t:
+                        t = latinish_title_fallback(
+                            (kwargs.get("source_title") or "").strip()
+                        )
                     kwargs["title"] = t if t else "Japanese Collectible Card"
                     d = kwargs.get("desc_html", "")
                     d = strip_listing_emoji(d)
@@ -927,7 +961,10 @@ def add_item_to_ebay(**kwargs) -> dict:
                         kwargs.get("item_specifics") or {}
                     )
                 elif scrub == 1:
-                    kwargs["title"] = latinish_title_fallback(kwargs.get("title", ""))
+                    kwargs["title"] = latinish_title_fallback(
+                        (kwargs.get("source_title") or "").strip()
+                        or kwargs.get("title", "")
+                    )
                     kwargs["desc_html"] = (
                         "<h2>Overview</h2><p>Japanese trading card product. See photos.</p>"
                         "<h2>Condition</h2><p>See listing photos.</p>"
@@ -952,7 +989,10 @@ def add_item_to_ebay(**kwargs) -> dict:
                 else:
                     _prev_sp = dict(kwargs.get("item_specifics") or {})
                     _game = _prev_sp.get("Game")
-                    kwargs["title"] = "Japanese Trading Card Collectible"
+                    _card = _prev_sp.get("Card Name")
+                    kwargs["title"] = _improper_words_final_title(
+                        kwargs, preserved_specifics=_prev_sp
+                    )
                     kwargs["desc_html"] = (
                         "<p>Japanese collectible. Photos show the item. "
                         f"Ships from Japan within {HANDLING_DAYS} business days via {SHIPPING_METHOD} with tracking on eBay. "
@@ -966,6 +1006,10 @@ def add_item_to_ebay(**kwargs) -> dict:
                         g = scrub_ebay_fragment(str(_game))
                         if g:
                             kwargs["item_specifics"]["Game"] = g[:60]
+                    if _card:
+                        c = scrub_ebay_fragment(str(_card))
+                        if c:
+                            kwargs["item_specifics"]["Card Name"] = c[:65]
                 logger.warning(
                     "  🔄 improper words → 安全化リトライ (pass %s/3)",
                     kwargs["_ebay_improper_scrub"],
@@ -1458,6 +1502,18 @@ def run_auto_listing(
                         )
                         continue
                     price_usd = min(price_usd, 2499.0)
+                    # 手動キュー: メルカリ価格の取り違え（桁・別行）で eBay 価格だけ異常に跳ねるのを止める
+                    if s_name == PRIORITY_SHEET_NAME and mercari_price > 0:
+                        _px_ratio = (price_usd * float(EXCHANGE_RATE)) / float(
+                            mercari_price
+                        )
+                        if _px_ratio > 22.0:
+                            update_item_status(
+                                row_num,
+                                f"🚫 価格整合性: 換算/仕入≈{_px_ratio:.1f}倍（メルカリ価格要確認）",
+                                s_name,
+                            )
+                            continue
                     # 最終利益・ROI検証（B列は価格逆算用。最低利益は部署keywordsの min_profit_jpy と共通ルールのみ）
                     final_profit = calc_profit(price_usd, mercari_price)
                     roi = final_profit / mercari_price * 100 if mercari_price > 0 else 0
