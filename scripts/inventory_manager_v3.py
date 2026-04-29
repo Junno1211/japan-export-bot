@@ -132,6 +132,10 @@ def _self_check_and_alert(counts: dict[str, int], total: int, txt_path: str) -> 
         triggers.append(
             "条件A: 全件active・不一致ゼロ。判定ロジック異常の可能性。4/25と同パターン"
         )
+    if total >= 20 and oos_total == 0 and dual >= 1:
+        triggers.append(
+            f"条件A': OOS=0だがdual_reject={dual}件あり。削除/SOLD見送り疑い、即時確認推奨"
+        )
     if total >= 10 and total > 0 and (dual / float(total)) >= 0.20:
         triggers.append("条件B: 二系統不一致が20%超")
     env_n = timeout_n + exception_n + html_fail
