@@ -146,7 +146,7 @@ while true; do
   # メルカリ用ブラウザが無駄に2倍動いていた。シェル側は省略。
 
   runlog="$ROOT/logs/auto_lister_fill_iter_$(date +%Y%m%d_%H%M%S)_${need}.log"
-  "${PY}" auto_lister.py --max-success "$need" >>"$runlog" 2>&1
+  "${PY}" auto_lister_auto.py --max-success "$need" >>"$runlog" 2>&1
   rc=$?
   echo "$ts auto_lister exit=$rc" | tee -a "$MASTER"
 
