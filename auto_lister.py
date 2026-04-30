@@ -50,6 +50,7 @@ from mercari_scraper import MercariPipelineStopped, scrape_mercari_item
 from ebay_updater import EbayTradingRateLimited, get_item_status, trading_post
 from mercari_proxy import playwright_launch_kwargs
 from shipping_policy_select import select_shipping_policy, ShippingBandMismatchError
+from title_placeholder_utils import is_placeholder_trading_card_title
 from ebay_lister import add_item, upload_picture_bytes
 from heartbeat import update_heartbeat
 from circuit_breaker import gemini_breaker, ebay_breaker, mercari_breaker
@@ -63,6 +64,9 @@ import os
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
+# 手動キュー: 仕入円 vs 換算後USDの倍率が異常に高いときは出品しない（スクレイプ桁ずれ等）
+MAX_PRICE_RATIO_GUARD = 22.0
+
 genai.configure(api_key=GEMINI_API_KEY)
 _GEMINI_MODEL = "gemini-1.5-flash"
 
@@ -73,8 +77,11 @@ EBAY_ENDPOINT = {
 
 VALID_CATEGORIES = {"183454", "183455", "261328", "69528", "31387", "1345"}
 
-# eBay トレカ単品系: ConditionID 3000(Used) は使えない（4000 アングレ / 2750 グレードのみ）
+# eBay トレカ単品系: 既定は ConditionID 4000 + 記述子 Name 40001（MIP トレカ用 Value 列）
+# カテゴリ 183454 / 261328 / 183050 ごとの許容値は eBay 側検証に依存。400011 等が拒否されたら
+# _ebay_descriptor_recovery_done で Condition 3000・記述子なしに一度落とす（P1-4）。
 EBAY_CARD_SINGLE_CATEGORY_IDS = frozenset({"183454", "261328", "183050"})
+EBAY_CARD_DESCRIPTOR_RECOVERY_CONDITION_ID = "3000"
 # eBay Trading Cards condition descriptors:
 # https://developer.ebay.com/api-docs/user-guides/static/mip-user-guide/mip-enum-condition-descriptor-ids-for-trading-cards.html
 EBAY_CARD_GRADED_CONDITION_ID = "2750"
@@ -692,7 +699,7 @@ def sanitize_item_specifics_values(specs: dict) -> dict:
 
 
 def latinish_title_fallback(title: str, max_len: int = TITLE_MAX_LENGTH) -> str:
-    """improper 再試行用: 記号を減らし英数字中心に（空なら固定文言）"""
+    """improper 再試行用: 記号を減らし英数字中心に（空なら空のまま—汎用題名にしない）"""
     t = strip_listing_emoji(title or "")
     for banned in EBAY_TITLE_BANNED_WORDS:
         t = re.sub(r"\b" + banned + r"\b", "", t, flags=re.IGNORECASE)
@@ -705,12 +712,7 @@ def latinish_title_fallback(title: str, max_len: int = TITLE_MAX_LENGTH) -> str:
         elif c.isalnum():
             buf.append(c)
     s = re.sub(r"\s+", " ", "".join(buf)).strip()[:max_len]
-    return s if s else "Japanese Collectible Card"
-
-
-_IMPROPER_GENERIC_TITLES = frozenset(
-    {"Japanese Collectible Card", "Japanese Trading Card Collectible"}
-)
+    return s if s else ""
 
 
 def _improper_words_final_title(kwargs: dict, *, preserved_specifics: dict) -> str:
@@ -727,16 +729,16 @@ def _improper_words_final_title(kwargs: dict, *, preserved_specifics: dict) -> s
         if not (candidate or "").strip():
             continue
         t = latinish_title_fallback(candidate)
-        if len(t) >= 14 and t not in _IMPROPER_GENERIC_TITLES:
+        if len(t) >= 14 and not is_placeholder_trading_card_title(t):
             return t[:TITLE_MAX_LENGTH]
     t_last = latinish_title_fallback(src) if src else ""
-    if len(t_last) >= 10 and t_last not in _IMPROPER_GENERIC_TITLES:
+    if len(t_last) >= 10 and not is_placeholder_trading_card_title(t_last):
         return t_last[:TITLE_MAX_LENGTH]
     t_en = gemini_translate_title_en(
         src,
         condition_ja=(kwargs.get("mercari_condition_ja") or ""),
     )
-    if len(t_en) >= 12 and t_en not in _IMPROPER_GENERIC_TITLES:
+    if len(t_en) >= 12 and not is_placeholder_trading_card_title(t_en):
         return t_en[:TITLE_MAX_LENGTH]
     return ""
 
@@ -894,40 +896,58 @@ def add_item_to_ebay(**kwargs) -> dict:
     condition_description_xml = ""
     _cid = cat_id
     force_cond = kwargs.get("_force_condition")
-    # トレカ単品系は 4000+記述子を最優先（if force_cond より先。リトライの 3000 で上書きされないようにする）
+    # トレカ単品系は 4000+記述子を最優先。eBay が記述子の組み合わせを拒否した場合は
+    # _ebay_descriptor_recovery_done で Condition 3000・記述子なしに一度逃がす。
     if _cid in EBAY_CARD_SINGLE_CATEGORY_IDS:
         kwargs.pop("_force_condition", None)
-        source_title = kwargs.get("source_title") or title
-        source_description = kwargs.get("source_description") or desc
-        graded_card = _detect_graded_card(source_title, source_description)
-        if graded_card:
-            condition_id = EBAY_CARD_GRADED_CONDITION_ID
-            condition_desc_xml = _build_graded_card_condition_descriptors_xml(
-                source_title,
-                source_description,
-                graded=graded_card,
-            )
-            logger.info(
-                "  📋 eBay card: graded %s（詳細は説明文・Mercari: %s）",
+        if kwargs.get("_ebay_descriptor_recovery_done"):
+            condition_id = EBAY_CARD_DESCRIPTOR_RECOVERY_CONDITION_ID
+            condition_desc_xml = ""
+            condition_description_xml = ""
+            if mercari_condition_ja:
+                condition_description_xml = f"""
+    <ConditionDescription><![CDATA[{_cdata_safe("Source condition label: " + mercari_condition_ja)}]]></ConditionDescription>"""
+            _prior_dv = _map_mercari_label_to_ebay_card_descriptor_value(mercari_condition_ja)
+            logger.warning(
+                "  📋 eBay card: descriptor recovery XML path — ConditionID=%s (no ConditionDescriptors), "
+                "category_id=%s, mapped_descriptor_value_was=%s, mercari_url=%s",
                 condition_id,
-                mercari_condition_ja or "—",
+                _cid,
+                _prior_dv,
+                (kwargs.get("mercari_url") or "")[:120],
             )
         else:
-            condition_id = EBAY_CARD_UNGRADED_CONDITION_ID
-            cd_val = _map_mercari_label_to_ebay_card_descriptor_value(mercari_condition_ja)
-            condition_desc_xml = f"""
+            source_title = kwargs.get("source_title") or title
+            source_description = kwargs.get("source_description") or desc
+            graded_card = _detect_graded_card(source_title, source_description)
+            if graded_card:
+                condition_id = EBAY_CARD_GRADED_CONDITION_ID
+                condition_desc_xml = _build_graded_card_condition_descriptors_xml(
+                    source_title,
+                    source_description,
+                    graded=graded_card,
+                )
+                logger.info(
+                    "  📋 eBay card: graded %s（詳細は説明文・Mercari: %s）",
+                    condition_id,
+                    mercari_condition_ja or "—",
+                )
+            else:
+                condition_id = EBAY_CARD_UNGRADED_CONDITION_ID
+                cd_val = _map_mercari_label_to_ebay_card_descriptor_value(mercari_condition_ja)
+                condition_desc_xml = f"""
     <ConditionDescriptors>
       <ConditionDescriptor>
         <Name>{EBAY_CARD_CONDITION_DESCRIPTOR_NAME_ID}</Name>
         <Value>{cd_val}</Value>
       </ConditionDescriptor>
     </ConditionDescriptors>"""
-            logger.info(
-                "  📋 eBay card: %s + descriptor %s（詳細は説明文・Mercari: %s）",
-                condition_id,
-                cd_val,
-                mercari_condition_ja or "—",
-            )
+                logger.info(
+                    "  📋 eBay card: %s + descriptor %s（詳細は説明文・Mercari: %s）",
+                    condition_id,
+                    cd_val,
+                    mercari_condition_ja or "—",
+                )
     elif force_cond:
         condition_id = str(force_cond).strip()
     elif _cid == "183455":
@@ -1097,7 +1117,7 @@ def add_item_to_ebay(**kwargs) -> dict:
                         if c:
                             kwargs["item_specifics"]["Card Name"] = c[:65]
                 tit_chk = (kwargs.get("title") or "").strip()
-                if not tit_chk or tit_chk in _IMPROPER_GENERIC_TITLES:
+                if not tit_chk or is_placeholder_trading_card_title(tit_chk):
                     logger.error(
                         "  eBay improper リトライ: 汎用・空の題名では出品しない（中止）"
                     )
@@ -1147,6 +1167,30 @@ def add_item_to_ebay(**kwargs) -> dict:
             )
             return {"success": False, "errors": errs}
 
+        _cat_desc = str(kwargs.get("category_id", "")).strip()
+        if (
+            _cat_desc in EBAY_CARD_SINGLE_CATEGORY_IDS
+            and not kwargs.get("_ebay_descriptor_recovery_done")
+            and (
+                "condition descriptor" in errs_lower
+                or "descriptor value" in errs_lower
+                or "not valid for condition descriptor" in errs_lower
+            )
+        ):
+            _merc_j = (kwargs.get("mercari_condition_ja") or "").strip()
+            _sent_dv = _map_mercari_label_to_ebay_card_descriptor_value(_merc_j)
+            logger.warning(
+                "  🔄 eBay condition-descriptor reject — will retry without descriptors. "
+                "category_id=%s descriptor_name_id=%s mapped_value_sent=%s mercari_url=%s err=%s",
+                _cat_desc,
+                EBAY_CARD_CONDITION_DESCRIPTOR_NAME_ID,
+                _sent_dv,
+                (kwargs.get("mercari_url") or "")[:120],
+                " / ".join(errs[:3])[:500],
+            )
+            kwargs["_ebay_descriptor_recovery_done"] = True
+            return add_item_to_ebay(**kwargs)
+
         retry_count = kwargs.get("_retry_count", 0)
         if retry_count >= 3:
             return {"success": False, "errors": errs}
@@ -1167,7 +1211,15 @@ def add_item_to_ebay(**kwargs) -> dict:
             import re as _re2
             logger.warning("  🔄 ポリシー violation → タイトル・説明文を安全版でリトライ")
             clean_title = _re2.sub(r"[^\w\s\-/.,()#]", "", kwargs.get("title", "")).strip()[:TITLE_MAX_LENGTH]
-            kwargs["title"] = clean_title or "Japanese Collectible"
+            if not clean_title:
+                clean_title = gemini_translate_title_en(
+                    (kwargs.get("source_title") or "").strip(),
+                    condition_ja=kwargs.get("mercari_condition_ja") or "",
+                )
+            if not clean_title or is_placeholder_trading_card_title(clean_title):
+                ebay_breaker.record_failure()
+                return {"success": False, "errors": ["policy_violation_non_listable_title"]}
+            kwargs["title"] = clean_title
             kwargs["desc_html"] = (
                 "<p>Authentic Japanese collectible. Please see photos for condition details.</p>"
                 + LISTING_SHIPPING_NOTE_HTML
@@ -1193,8 +1245,6 @@ def add_item_to_ebay(**kwargs) -> dict:
         logger.error("  [eBay Trading] HTTP 429 — 処理停止（Phase 0）: %s", e)
         ebay_breaker.record_failure()
         try:
-            from notifier import notify_slack
-
             notify_slack(f"🛑 **[eBay Trading] AddFixedPriceItem** 429 — {e}")
         except Exception:
             pass
@@ -1342,8 +1392,11 @@ def run_auto_listing(
     # 手動キュー単独（run_priority_listings.sh: --max-auto-success 0）は、
     # ユーザーが目視選定したURLだけを処理するため test_rules.py を通さない。
     priority_only_run = max_auto_success == 0
+    skip_test_rules_env = os.environ.get("SKIP_TEST_RULES", "").strip() == "1"
     if priority_only_run:
         logger.info("⏭️ 手動キュー単独実行のため test_rules.py をスキップ")
+    elif skip_test_rules_env:
+        logger.info("[SKIP_TEST_RULES=1] test_rules バイパス")
     else:
         # 既定120秒だと Google/メルカリが遅いと TimeoutExpired になるため長めにする（秒で上書き可）
         import subprocess
@@ -1357,12 +1410,27 @@ def run_auto_listing(
             logger.error(
                 f"🚨 test_rules.py が {_tr_timeout} 秒でタイムアウト — 出品中止（遅延時は TEST_RULES_TIMEOUT_SEC を増やす）"
             )
-            notify_slack("🚨 test_rules.py タイムアウト — auto_lister 出品中止")
+            try:
+                notify_slack("🚨 test_rules.py タイムアウト — auto_lister 出品中止")
+            except Exception:
+                pass
             return
         if _test_result.returncode != 0:
             logger.error(f"🚨 test_rules.py 失敗 — 出品中止")
-            logger.error(_test_result.stdout[-500:] if _test_result.stdout else "no output")
-            notify_slack("🚨 test_rules.py 失敗 — auto_lister 出品中止")
+            _out = (_test_result.stdout or "").strip()
+            _err = (_test_result.stderr or "").strip()
+            if _out:
+                logger.error("test_rules stdout (末尾500): %s", _out[-500:])
+            if _err:
+                logger.error("test_rules stderr (末尾1500): %s", _err[-1500:])
+            if not _out and not _err:
+                logger.error(
+                    "test_rules: stdout/stderr とも空（ログは通常 stderr。プロセス異常終了や import 前落ちの疑い）"
+                )
+            try:
+                notify_slack("🚨 test_rules.py 失敗 — auto_lister 出品中止")
+            except Exception:
+                pass
             return
         logger.info("✅ test_rules.py 全テスト合格")
 
@@ -1503,8 +1571,6 @@ def run_auto_listing(
                         except MercariPipelineStopped as mps:
                             logger.error("  メルカリ sourcing 停止（Phase0）: %s", mps)
                             try:
-                                from notifier import notify_slack
-
                                 notify_slack(
                                     f"🛑 **[Mercari] listing 停止** Phase0 rate limit\n{mps}\n{url[:200]}"
                                 )
@@ -1605,10 +1671,21 @@ def run_auto_listing(
                         _px_ratio = (price_usd * float(EXCHANGE_RATE)) / float(
                             mercari_price
                         )
-                        if _px_ratio > 22.0:
+                        _ratio_bad = _px_ratio > MAX_PRICE_RATIO_GUARD
+                        logger.warning(
+                            "manual queue price-ratio guard: mercari_jpy=%s listing_usd=%.4f "
+                            "ratio=%.4f threshold=%s decision=%s",
+                            mercari_price,
+                            price_usd,
+                            _px_ratio,
+                            MAX_PRICE_RATIO_GUARD,
+                            "SKIP" if _ratio_bad else "OK",
+                        )
+                        if _ratio_bad:
                             update_item_status(
                                 row_num,
-                                f"🚫 価格整合性: 換算/仕入≈{_px_ratio:.1f}倍（メルカリ価格要確認）",
+                                f"🚫 SKIP_PRICE_RATIO: 仕入約¥{mercari_price:,} 出品${price_usd:.2f} "
+                                f"倍率{_px_ratio:.2f} > {MAX_PRICE_RATIO_GUARD}（価格・スクレイプ要確認）",
                                 s_name,
                             )
                             continue

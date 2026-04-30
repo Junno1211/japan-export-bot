@@ -14,4 +14,4 @@ if [ -f "$LOCK" ]; then
         exit 0
     fi
 fi
-timeout 1800 ./venv/bin/python3 -u scripts/inventory_manager_v3.py >> logs/cron_inventory_v3.log 2>&1
+timeout 1800 ./venv/bin/python3 -u scripts/inventory_manager_v3.py "$@" >> logs/cron_inventory_v3.log 2>&1

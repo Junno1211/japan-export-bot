@@ -2,11 +2,11 @@
 """
 inventory_manager_v3.py — メルカリ照合（純之介3条件ルールのみで eBay OOS）
 
-- OOS 化（set_quantity 0）は次の 3 条件のいずれかが Playwright で確定した場合のみ:
-  sold / auction / deleted
-- HEAD リクエストは使わない（mercari_head_stage1 等は未使用）。
+- OOS 化のきっかけは Playwright が sold / auction / deleted と判定したときのみ。
+  sold・deleted は **API が error でも OOS**（削除・売切りの二重販売防止）。auction だけ API と突合する。
+- deleted(url_notfound) 時の HEAD はログ用（OOS 判定には用いない）。
 - pending 二段ロジックなし。
-- mercari_checker.check_mercari_status は **二系統突合** のため import する（在庫本流の inventory_manager.py は変更しない）。
+- mercari_checker.check_mercari_status は auction 突合・ログ用（在庫本流の inventory_manager.py は変更しない）。
 
   cd /opt/export-bot
   ./venv/bin/python3 -u scripts/inventory_manager_v3.py --dry-run --limit 10 --verbose
@@ -57,6 +57,7 @@ from mercari_checker import (  # noqa: E402
 )
 from mercari_proxy import playwright_launch_kwargs  # noqa: E402
 from sheets_manager import map_ebay_item_id_to_row_and_url  # noqa: E402
+from v3_dual_reject_invariant import assert_dual_reject_detail_matches_counts  # noqa: E402
 
 LOCK_FILE = "/tmp/inventory_manager_v3.lock"
 
@@ -498,11 +499,11 @@ def _v3_dual_confirm_oos(
     api_snap: dict[str, Any] | None = None,
 ) -> tuple[bool, str, dict]:
     """
-    Phase0 論点A: DOM(Playwright) + API（+ url_notfound 時は HEAD 404）の二系統で OOS 確定。
-    不一致・API 不定のときは OOS しない。
+    OOS 前の突合（auction のみ API と整合必須）。
 
-    api_snap: item_id がある場合に Playwright と並走で取得した API 結果（二系統の独立性は維持）。
-    None のとき（Shops 等 item_id なし）は従来どおり check_mercari_status。
+    - Playwright が sold / deleted を確定したら、API が error でも OOS する（二重販売防止）。
+    - auction は従来どおり API が auction と一致するときのみ OOS。
+    api_snap: item_id がある場合に Playwright と並走で取得した API 結果。
     """
     if verdict not in ("sold", "auction", "deleted"):
         return False, "not_oos_verdict", {}
@@ -511,26 +512,22 @@ def _v3_dual_confirm_oos(
     else:
         api = check_mercari_status(mercari_url, delay=0.15)
     ast = api.get("status", "error")
-    snap: dict = {"api_status": ast}
+    snap: dict[str, Any] = {"api_status": ast}
+
+    if verdict == "sold":
+        return True, "scraping_sold_force_oos", snap
+    if verdict == "deleted":
+        if "url_notfound" in (reason or ""):
+            snap["head_status_deleted_confirm"] = _head_status_for_deleted_confirm(mercari_url)
+        return True, "scraping_deleted_force_oos", snap
+
     if ast in ("error", "html_error"):
         return False, f"api_indeterminate:{ast}", snap
     if verdict == "auction":
         if ast != "auction":
             return False, f"auction_mismatch_api={ast}", snap
         return True, "dual_ok_auction", snap
-    if verdict == "sold":
-        if ast not in ("sold_out", "trading", "stop"):
-            return False, f"sold_mismatch_api={ast}", snap
-        return True, "dual_ok_sold", snap
-    # deleted
-    if "url_notfound" in (reason or ""):
-        sc = _head_status_for_deleted_confirm(mercari_url)
-        if sc != 404:
-            return False, f"deleted_url_HEAD_not_404 http={sc}", snap
-        return True, "dual_ok_deleted_url", snap
-    if ast not in ("deleted", "sold_out"):
-        return False, f"deleted_mismatch_api={ast}", snap
-    return True, "dual_ok_deleted", snap
+    return False, f"unexpected_verdict:{verdict}", snap
 
 
 def _mark_oos_v3(ebay_id: str, verdict: str, reason: str, *, dry_run: bool) -> bool:
@@ -890,6 +887,8 @@ def run_inventory_check_v3(
                         browser.close()
                     except Exception:
                         pass
+
+        assert_dual_reject_detail_matches_counts(counts, detail_rows)
 
         end = datetime.now()
         end_s = end.strftime("%Y-%m-%d %H:%M:%S")

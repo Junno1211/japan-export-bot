@@ -5,6 +5,7 @@ from playwright.sync_api import sync_playwright
 from sheets_manager import _get_service, SPREADSHEET_ID
 from config import LISTING_SHEET_NAME
 from auto_lister import ai_analyze
+from title_placeholder_utils import is_placeholder_trading_card_title
 from ebay_updater import revise_item_title
 from mercari_scraper import scrape_mercari_item
 
@@ -41,7 +42,7 @@ def run_bulk_repair():
             if "Active" not in status: continue
                 
             # タイトルが短い（70文字未満）ものを対象
-            if len(current_title) < 70 or "Japanese Collectible" in current_title:
+            if len(current_title) < 70 or is_placeholder_trading_card_title(current_title):
                 logger.info(f"📍 Repairing Row {i+2}: {current_title} ({len(current_title)} chars)")
                 
                 try:

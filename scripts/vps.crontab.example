@@ -30,6 +30,7 @@ CRON_TZ=Asia/Tokyo
 
 # ---- 手動キュー（スプレッドシート「手動」タブ）PC なしで定期的に処理 ----
 # 引数なし = その時点で溜まっている分を処理。重複起動は priority_listings_background.sh 内の flock で抑止。
+# 止めるときはこの 1 行をコメントアウトする。`# DISABLED ...` だけ残して有効行と混在させない（docs/manual_listing_operations.md）。
 # 初回だけなら VPS で bash scripts/ensure_priority_cron.sh でも同じ 1 行を入れられる。
 */30 * * * * cd /opt/export-bot && bash scripts/priority_listings_background.sh >> logs/cron_priority_bg.log 2>&1
 # 一度に何件までにしたいときだけ数字を付ける例: ... priority_listings_background.sh 5

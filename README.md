@@ -247,6 +247,55 @@ crontab -l
 
 ---
 
+## Shipping Policy マップのデプロイ前チェック
+
+出品価格の $50 刻みごとに **Trading API 用の Shipping Profile ID**（数値）が `config.py` 経由の `SHIPPING_POLICY_MAP` に必要です。欠けると「価格帯 Shipping 未設定」相当で停止します。**デプロイ前**に次を実行してください。
+
+```bash
+cd "/path/to/海外輸出ボット"
+python3 scripts/check_shipping_policy_map.py
+```
+
+**サンプル出力（エラーなし）**
+
+```text
+--- OK: ERROR 0 件、WARNING 3 件 ---
+```
+
+`WARNING` は同一 Profile ID が複数の bracket_key に使われているとき（設定の前方埋めの継ぎ足し）に出ます。Seller Hub の band ごとの実 ID と一致しているか確認してください。`ERROR:` 行がある場合は終了コード 1 です。
+
+また、`select_shipping_policy` の**初回呼び出し**時にも同様の検証が行われ、`ERROR` が残っていると例外で停止します（誤出品防止）。
+
+### 本命: band ごとに Seller Hub の Profile ID を作り込む（前方埋めの解消）
+
+前方埋めだけでは **複数 bracket が同一 Profile ID を共有**し、実送料が Seller Hub の意図とズレることがあります。**config.py はツールが自動では書き換えない**（ID 取り違え防止）。手順は次のとおりです。
+
+1. **Seller Hub（Business policies → Shipping / Fulfillment）** で、価格帯ごとに別ポリシーを作る。ポリシー**名**は `shipping_policy_select.policy_label_for_bracket` と揃える（例: `$700–$749`）。命名の根拠は `shipping_policy_select.py` の `policy_label_for_bracket` / `parse_band_from_policy_name` と `test_rules.py` の shipping テスト。
+2. **Mac** でリポジトリに `cd` し、TSV を取得（**トークンをログやチャットに貼らない**）:
+   ```bash
+   cd "/Users/miyazakijunnosuke/Downloads/eBay/海外輸出ボット"
+   python3 scripts/dump_shipping_policies.py > policies.tsv
+   ```
+   ※ Sell Account API が **401** のときは、Trading 用 IAF トークンでは REST が通らない場合があります。eBay Developer の手順で、Account API 用の **OAuth ユーザーアクセストークン** を取得し、`.env` の **ユーザー向けトークン**として利用可能なキーに設定してください（具体的なキー名・スコープは eBay 公式ドキュメントに従う）。
+3. **検証**（ERROR 0 になるまで config の手編集を繰り返す）:
+   ```bash
+   python3 scripts/validate_shipping_policy_map.py policies.tsv
+   ```
+4. **更新案の参照**: `scripts/proposed_shipping_policy_base_patch.md` の diff 雛形と注意書きを見ながら、`_SHIPPING_POLICY_BASE` を **手で** 編集する（プレースホルダを TSV の ID に置換）。
+5. **デプロイ**（例）:
+   ```bash
+   HOST=root@133.117.76.193
+   BASE="/Users/miyazakijunnosuke/Downloads/eBay/海外輸出ボット"
+   scp "$BASE/config.py" "$HOST:/opt/export-bot/"
+   scp "$BASE/scripts/dump_shipping_policies.py" "$HOST:/opt/export-bot/scripts/"
+   scp "$BASE/scripts/validate_shipping_policy_map.py" "$HOST:/opt/export-bot/scripts/"
+   scp "$BASE/scripts/proposed_shipping_policy_base_patch.md" "$HOST:/opt/export-bot/scripts/"
+   ```
+
+手動キュー（スプレッドシート「手動」タブ）の cron 運用・停止・再開は [docs/manual_listing_operations.md](docs/manual_listing_operations.md) を参照してください。
+
+---
+
 ## 主要ファイル一覧
 
 | ファイル | 役割 |
