@@ -1,0 +1,16 @@
+[Unit]
+Description=海外輸出ボット 手動キュー出品（最大 %i 件成功まで）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/export-bot
+Environment=SKIP_PURGE_UNBUYABLE=1
+Environment=PRIORITY_SHEET_SAMPLE_ONLY=1
+ExecStart=/bin/bash /opt/export-bot/scripts/run_priority_listings.sh %i
+Restart=no
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,659 @@
+================================================================================
+海外輸出ボット — コピペ手順（このファイルが正）
+Mac: このリポジトリ内。VPS: /opt/export-bot/COPY_PASTE_SETUP.txt（deploy のたびに同期）
+
+【日常の運用だけ知りたい人】同じフォルダの「完成_運用だけ.txt」を開けば足りる（こちらは詳細・トラブル用）。
+================================================================================
+
+--------------------------------------------------------------------------------
+【初回1回だけ】まだ cron を入れてない人だけ。それ以外は読まなくていい。
+--------------------------------------------------------------------------------
+
+  手順（全部コピペだけ。**対話的にログインしてから別コマンド**、は出てこない。`ssh` は **1行に含まれる**）
+
+    1. Mac で **ターミナル**を開く（Spotlight に「ターミナル」と打って Enter でもよい）
+    2. 下の **1行** をまるごとコピーする（**書き換え不要。そのまま貼る**）
+    3. ターミナルに貼り付けて **Enter を1回**
+    4. パスワードを聞かれたら **ConoHa の root パスワード**を入れて Enter（文字が出なくてよい）
+    5. 画面に `*/30 * * * *` みたいな行が出たら **終わり**。この操作は **二度と不要**
+
+    ※ VPS を別の IP に乗り換えたときだけ、このファイル内の `133.117.76.193` を新しい IP に直す（通常は触らない）
+
+[Mac のターミナルにそのまま貼る 1 行]
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && (crontab -l 2>/dev/null | grep -v priority_listings_background; echo "*/30 * * * * cd /opt/export-bot && bash scripts/priority_listings_background.sh >> logs/cron_priority_bg.log 2>&1") | crontab - && crontab -l'
+
+[Mac のターミナルにそのまま貼る 1 行・別解（deploy 後に scripts/ensure_priority_cron.sh があるとき）]
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && bash scripts/ensure_priority_cron.sh'
+
+--------------------------------------------------------------------------------
+【俺がやることはこの2つだけ】
+--------------------------------------------------------------------------------
+
+  1) **初回だけ**：上の【初回1回だけ】を、まだやってない人だけやる（もうやった人はスキップ）
+  2) **毎日**：スプレッドシートの **「手動」タブ**に **A=URL・B=期待利益** を入れて保存。**以上。**
+
+--------------------------------------------------------------------------------
+
+# ルール（このファイルの約束）
+
+- あなたがやることは、すべて「どこで」「何をコピペするか」だけで分かるようにしてある。
+- 見出しの **[Mac]** = **Apple Mac のターミナルに貼るだけ**。リモート（ConoHa）で動かす内容は **`ssh root@133.117.76.193 '...'`** または **`ssh ... bash -s <<'REMOTE'`** にまとめてある。**先に ssh だけしてプロンプトが変わってから別のコマンドを貼る手順は書かない。**
+- 同じ画面で続けてよいコマンドは、ひとつの [Mac] ブロックにまとめてある。
+- コマンド中の **133.117.76.193** はこのプロジェクトの VPS 前提。**そのままコピペでよい**（サーバを乗り換えたときだけ全体を置換）。
+
+================================================================================
+★ 毎日やることはこれだけ（意思決定なし）
+================================================================================
+
+  毎日あなたがやること
+    - スプレッドシートの **「手動」タブ**に、**A=メルカリURL・B=期待利益** を入れて保存する（空いた時間でよい）。
+    - **ターミナルも SSH も開かない。** Mac で出品コマンドは叩かない。
+
+  出品は誰がやるか
+    - **VPS** が決まった間隔で `priority_listings_background.sh` を実行する。**あなたは触らない。**
+
+  cron の入れ方（**ファイルの一番上の【初回1回だけ】の 1 行だけ**。ここには書かない）
+
+  上の crontab は **30 分ごと**に手動キューを処理する。**もう決めることはない。**
+  動いてるか不安なときだけ **J 節** か `tail -30 /opt/export-bot/logs/cron_priority_bg.log`。
+
+  ※ **VPS の月額・電気・API（クレジット）の話**
+    - **ConoHa 等の VPS 料金**は、だいたい **月の定額**で、cron を足したからといって **請求が「30分ごとに増える」タイプではない**（プランによるが一般的にはそう）。
+    - **電気**はデータセンタ側。処理は **Mac を起けっぱなしにしない**分、ローカルよりサーバ集中の方がよいことが多い。
+    - **Gemini / eBay / メルカリ取得のコストや負荷**は **実際に出品処理が走ったとき**に乗る。**手動キューが空なら**起動してすぐ終わりに近く、**30分おきにフル出品を繰り返すわけではない**。
+    - 間隔を空けて **API 起動回数を減らしたい**だけなら、crontab の `*/30` を例えば `*/60`（1時間ごと）や `0 */2 * * *`（2時間ごと）に変えればよい。
+
+================================================================================
+■ 固定コマンド（Mac のターミナルに毎回これだけ貼る・手動で VPS を回す）
+================================================================================
+
+  cron を入れない／今日は自分で回すとき用。**中身は毎回同じ。IP だけ自分の VPS に合わせる。**
+
+[Mac]
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && bash scripts/priority_listings_background.sh'
+
+  - **そのまま貼る**（毎回同じ1行。IP はこのファイル固定）。
+  - パスワードや鍵の確認は出るかもしれない。それ以外の判断は不要。
+
+================================================================================
+# 目次（やりたいこと → 飛ばす見出し）
+================================================================================
+
+  ★   毎日これだけ（スプシ＋任意で cron）
+  ■   固定コマンド（Mac から毎回同じ1行で手動キュー）
+  0   手動キュー補足
+  Z   Mac を閉じる運用
+  A   迷った・今どこで作業してるか確認
+  B   いつもの：コードを VPS に送って pip（毎回の更新）
+  B2  VPS の crontab で出品目標 45→70（**まず B2.0**＝Mac から1ブロック）
+  C   Mac の crontab から auto_lister を外す（まだなら）
+  D   リモートのシェルだけ試す（ssh 1行）
+  E   初回だけ／環境を作り直す（venv_setup）
+  F   手動キューを PC なしで出品（バックグラウンド）
+  G   cron に手動キューを足す（任意）
+  H   systemd で手動キュー（任意）
+  I   メルカリだけ VPN プロキシ（.env）
+  J   動いてるか確認
+  K   Google スプレッドシート「手動」タブの列
+  L   VPS が重い・Swap が張り付く
+  M   メモリは足りてる？（ConoHa 画面の限界）・スクレイプ失敗の対処
+  N   緊急：eBay が在庫0のとき復旧スクリプト（VPS だけで実行）
+  O   在庫管理（cron と「メルカリ照合」の違い・確認・反映フラグ）
+  完全版  コード更新 → deploy →（必要なときだけ pip）→ 出品件数（ログ集計）まで
+
+================================================================================
+完全版：コード更新 → deploy →（必要なときだけ pip）→ 出品件数（ログ集計）まで
+================================================================================
+
+  このブロックは「B 節の内容＋α」を **順番どおり** にしたもの。**貼る場所はずっと Mac のターミナル**（対話的に `ssh` してから別コマンド、はしない）。
+  **ステップ2（pip）**は requirements を変えたとき／ImportError のときだけ。多くのデプロイでは **ステップ1のあとステップ4へ飛んでよい**。
+
+  【注意】`logs/daily_listing_totals.json` の合計は **ボットが記録した成功数**。
+  **商取引の正本は eBay セラーハブのリスト（開始日）**。ズレるときは eBay を優先。
+
+--------------------------------------------------------------------------------
+■ コピーするもの一覧（この順に、ターミナルへ貼る）
+--------------------------------------------------------------------------------
+
+  ステップ1 … Mac … 「▼ステップ1」deploy（3行）→ **多くの場合ここで終わり**
+  ステップ2 … Mac … 「▼ステップ2」pip（**ssh 1行**・**requirements を変えた直後 / ImportError のときだけ**）
+  ステップ3 … Mac … 任意「▼ステップ3」コンテキスト確認（**ssh 1行**）
+  ステップ4 … Mac … 「▼ステップ4」集計（**ブロック全体**。`"2026-04"` だけ編集）
+  ステップ5 … Mac … 任意「▼ステップ5」JSON を Mac へ（scp またはスクリプト）
+
+  ※ 「コピー開始」「コピー終了」という**文字そのものはコピーに含めない**。その間の行だけ。
+
+--------------------------------------------------------------------------------
+1) Mac：コードを VPS に送る（deploy）
+--------------------------------------------------------------------------------
+
+[Mac] ターミナルを開く。
+
+▼ステップ1（コピーするのはここだけ）
+--コピー開始--
+cd ~/Downloads/eBay/海外輸出ボット
+export VPS_IP=133.117.76.193
+bash deploy.sh
+--コピー終了--
+
+  `deploy.sh` がパスワードを求めたら ConoHa の root パスワード。`✅ 転送完了` まで待つ。
+  **パスワードが2回**出ることがある（rsync と ssh が別に聞く）。異常ではない。
+
+  **このあと何をするか**
+    · `✅ 転送完了` が出たら **多くの場合、ステップ1だけで終わり**。同じ deploy を繰り返さない。
+    · **ステップ2（pip）**は次のときだけ。**①** Mac で `requirements.txt` を変えてからデプロイした直後。**②** VPS で「モジュールがない」「ImportError」と出た直後。それ以外は **スキップでよい**（毎回 pip は不要）。
+    · deploy 終了後に長い案内が出るが、**全部を毎回やるリストではない**（正本のこの説明と `deploy.sh` の先頭ブロックに合わせる）。
+
+--------------------------------------------------------------------------------
+2) Mac：依存関係を揃える（pip・リモートで実行）※上に該当するときだけ
+--------------------------------------------------------------------------------
+
+[Mac]
+
+▼ステップ2（コピーするのはここだけ）
+--コピー開始--
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && ./venv/bin/pip install -r requirements.txt'
+--コピー終了--
+
+--------------------------------------------------------------------------------
+3) Mac（任意）：今どのマシンか確認（リモート）
+--------------------------------------------------------------------------------
+
+[Mac]
+
+▼ステップ3（コピーするのはここだけ）
+--コピー開始--
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && bash scripts/shell_context_hint.sh'
+--コピー終了--
+
+--------------------------------------------------------------------------------
+4) Mac：今月の出品成功数（ボット記録・日別と合計）
+--------------------------------------------------------------------------------
+
+  **貼る前に1か所だけ編集する**：▼ステップ4 の **`"2026-04"`** だけ知りたい年月に変える（例：`"2026-05"`）。**それ以外は触らない。**
+
+[Mac]
+
+▼ステップ4（コピーするのは **--コピー開始-- から --コピー終了-- までの全行**）
+--コピー開始--
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 bash -s <<'REMOTE'
+cd /opt/export-bot || exit 1
+python3 <<'PY'
+import json
+from pathlib import Path
+p = Path("logs/daily_listing_totals.json")
+d = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+month = "2026-04"
+rows = sorted((k, v.get("success", 0), v.get("fail", 0)) for k, v in d.items() if k.startswith(month))
+print("日付        success  fail")
+for k, s, f in rows:
+    print(k, s, f)
+print("---")
+print(month + " 合計 success:", sum(s for _, s, _ in rows))
+PY
+REMOTE
+--コピー終了--
+
+--------------------------------------------------------------------------------
+5) Mac（任意）：VPS の daily_listing_totals.json を Mac に退避して見る
+--------------------------------------------------------------------------------
+
+[Mac]
+
+▼ステップ5（コピーするのはここだけ・初回も yes 不要）
+--コピー開始--
+scp -o StrictHostKeyChecking=accept-new root@133.117.76.193:/opt/export-bot/logs/daily_listing_totals.json ~/Downloads/daily_listing_totals.json.from-vps
+--コピー終了--
+
+  または **同じことを1本で**（リポジトリのスクリプト。上とどちらかでよい）:
+
+[Mac]
+
+--コピー開始--
+cd ~/Downloads/eBay/海外輸出ボット && bash scripts/mac_pull_daily_listing_totals.sh
+--コピー終了--
+
+  パスワードを聞かれたら root パスワード。ファイルは Mac の `~/Downloads/daily_listing_totals.json.from-vps`。
+
+================================================================================
+0. 手動キュー（本番は VPS のみ）
+================================================================================
+
+  毎日のルーティンは **★ のブロックだけ読めば足りる。** ここは補足。
+
+  方針
+    - 手動タブの出品は **VPS のみ**。Mac の `manual_listing.sh` は **VPS が死んでるときの非常用**（VPS と同時実行しない）。
+
+  手動で今すぐ1回回したいときだけ（任意）
+
+[Mac]
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && bash scripts/priority_listings_background.sh'
+
+  定期は ★ の crontab。**G / H は別手段として残してあるが、迷ったら ★ の1行でよい。**
+
+  列の位置は **K 節**。Mac から試すなら（非推奨）: `bash manual_listing.sh`
+
+================================================================================
+Z. Mac を閉じる／毎日の作業を「できるところまで」仕組み化する
+================================================================================
+
+  結論
+    - **Mac のフタを閉じる**と、スリープ中は **launchd（毎晩 22 時の日報など）も手動出品も動かない**ことが多い。
+      閉じる前にターミナルで回していた **manual_listing も止まる**（未完了なら再実行が必要）。
+    - **毎日の出品本体は VPS 上で回す**のがこのプロジェクトの前提。Mac は **スプレッドシートに行を足す**程度に寄せる。
+
+  あなたが毎日やること（人の手）
+    1. Google スプレッドシートの **「手動」タブ**に URL・利益を入れて保存（スマホでも可）
+
+  仕組みに任せること（VPS）
+    2. サーバが **定期的に** `priority_listings_background.sh` を実行し、**手動キューだけ**消化する  
+       → 手順は **F / G / H 節**（どれか一つでよい。初回だけ **Mac から `ssh ...` 1行**で設定）。
+    3. VPN が必要なら **VPS の .env に MERCARI_PROXY_*（I 節）**。Mac の VPN を付けなくてよい。
+
+  まとめ
+    - **PC を閉じてよい**のは「出品は VPS に任せたあと」。
+    - まだ Mac だけで `manual_listing.sh` しているなら、**閉じる前に完了を待つ**か、**VPS の F〜H を有効にする**。
+
+================================================================================
+A. 迷った・今どこで作業してるか確認
+================================================================================
+
+[Mac]（本番サーバの状態を見る）
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && bash scripts/shell_context_hint.sh'
+
+[Mac]（手元のフォルダだけ確認）
+
+cd ~/Downloads/eBay/海外輸出ボット
+
+bash scripts/shell_context_hint.sh
+
+================================================================================
+B. いつもの：コードを VPS に送って pip（毎回の更新）
+================================================================================
+
+[Mac]
+
+cd ~/Downloads/eBay/海外輸出ボット
+
+export VPS_IP=133.117.76.193
+
+bash deploy.sh
+
+[Mac]（続けて pip。リモートで実行）
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && ./venv/bin/pip install -r requirements.txt'
+
+  ※ **在庫管理（必須・ビジネスの要）**: VPS の cron で **`inventory_manager.py` を定期実行する**（既定例は **3時間に1回**・`scripts/vps.crontab.example` の `0 */3 * * *` 行。Macの電源は不要）。当該行を crontab から **削除しない**。止めるのは CEO が明示したときと障害復旧の判断時のみ。
+  ※ **在庫管理 v3（任意・純之介ルール版）**: `scripts/inventory_manager_v3.py` は既存 `inventory_manager.py` と**別プロセス**。安定確認後に CEO が既存 cron を止める等の判断。**並行稼働用の cron 追加例（手動・別行で追加。既存の inventory_manager 行は勝手に消さない）**:
+      `0 */3 * * * cd /opt/export-bot && ./venv/bin/python3 -u scripts/inventory_manager_v3.py >> logs/inventory_v3_cron.log 2>&1`
+      本番 OOS 前に必ず `--dry-run` でログ・`logs/inventory_v3_report_*.txt` を確認すること。
+  ※ メルカリ照合〜eBay 在庫0 等は **`config.py` の `INVENTORY_APPLY_EBAY_OOS` 既定 True**。止めるとき **だけ** VPS `.env` に `INVENTORY_APPLY_EBAY_OOS=0` または `false`。
+
+  ※ **出品件数の記録（重要）**
+    - `deploy.sh` は **VPS 上の** `logs/daily_listing_totals.json`・`logs/LISTING_STATS.md`・`logs/daily_report_*.md`・
+      `knowledge_vault/日報/` を **Mac から上書きしない**（本番で溜まった集計が消えない）。
+    - **今月何品か**は eBay が商取引の正本。ボット側は VPS で次を見る:
+        `cat /opt/export-bot/logs/LISTING_STATS.md`（月別・直近31日）
+    - **過去に Mac から deploy して消えた日付は復元されない**（今後は上記 exclude で再発しにくい）。
+
+================================================================================
+B2. VPS の crontab で出品目標を 45→70 に直す（nano）
+================================================================================
+
+--------------------------------------------------------------------------------
+B2.0  まずこれ（Mac のターミナルだけ・コピペ1ブロック・nano 不要）
+--------------------------------------------------------------------------------
+
+  **貼る場所**: **Mac のターミナル**だけ（リポジトリのスクリプトが `ssh` まで含む）。
+
+  **事前**: 少なくとも一度 **Mac で `deploy.sh`** して VPS に `scripts/fix_crontab_fill_daily_70.sh` があること。
+
+[Mac]
+
+cd "/Users/miyazakijunnosuke/Downloads/eBay/海外輸出ボット" && bash scripts/mac_fix_fill_daily_70_on_vps.sh
+
+  パスワードを聞かれたら **ConoHa の root パスワード**。最後に `fill_daily_until_done.sh 70` の **1行**が出れば OK。
+
+--------------------------------------------------------------------------------
+B2.1  同じ内容をスクリプトなしで1行（上とどちらかでよい）
+--------------------------------------------------------------------------------
+
+[Mac]
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && bash scripts/fix_crontab_fill_daily_70.sh && crontab -l | grep fill_daily_until_done'
+
+--------------------------------------------------------------------------------
+B2.2  nano で手で直す（上で済んだら不要）
+--------------------------------------------------------------------------------
+
+  **よくあるミス**: `crontab -e` のあと **「Choose 1-4」** と出たら、cron の行は貼らない。**`1` だけ** Enter（nano）。
+
+[Mac]（対話エディタが要るので **`-t`**。終了はエディタ上で保存のあと）
+
+ssh -t -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'crontab -e'
+
+  **GNU nano** が開いたら、次の **1行** を探して **`45` → `70`**、または行ごと差し替え。
+
+0 4 * * * cd /opt/export-bot && bash scripts/fill_daily_until_done.sh 45 >> logs/cron_fill.log 2>&1
+
+  差し替え用（全文・1行）:
+
+0 4 * * * cd /opt/export-bot && bash scripts/fill_daily_until_done.sh 70 >> logs/cron_fill.log 2>&1
+
+  コメント2行も直すなら（任意）:
+
+# 4:00 — 本日の出品開始件数が 70 に達するまで test_rules → auto_lister をループ（成功/失敗とも Slack）
+# ※70品は「出品待ちキュー・test_rules・eBay API」が許す範囲。足りない日は Slack で未達通知。
+
+  保存: **Ctrl + O** → Enter → **Ctrl + X**
+
+[Mac]（確認）
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'crontab -l | grep fill_daily_until_done'
+
+  **期待する出力の例（1行・全文）**
+
+0 4 * * * cd /opt/export-bot && bash scripts/fill_daily_until_done.sh 70 >> logs/cron_fill.log 2>&1
+
+================================================================================
+C. Mac の crontab から auto_lister を外す（まだなら・Mac だけ）
+================================================================================
+
+[Mac]
+
+cd ~/Downloads/eBay/海外輸出ボット
+
+bash scripts/disable_mac_cron_auto_lister.sh
+
+crontab -l
+
+================================================================================
+D. リモートのシェルだけ試す（接続確認）
+================================================================================
+
+[Mac]
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new -t root@133.117.76.193 'bash -l'
+
+================================================================================
+E. 初回だけ／環境を作り直す（venv・Playwright が無いときだけ。済んでいればスキップ）
+================================================================================
+
+[Mac]（**1ブロックまるごと**貼る。途中で止まったら最後まで再実行）
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 bash -s <<'REMOTE'
+set -e
+ls -la /opt/export-bot
+cd /opt/export-bot
+chown -R root:root /opt/export-bot
+bash vps_setup.sh
+./venv/bin/python3 -c "import config; print('OK')"
+crontab scripts/vps.crontab.example
+crontab -l
+mkdir -p logs
+tail -30 logs/cron_fill.log || true
+REMOTE
+
+================================================================================
+F. 手動キューを PC なしで出品（溜まり全部）
+================================================================================
+
+[Mac]
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && bash scripts/priority_listings_background.sh'
+
+[Mac]（件数で打ち切りたいときだけ）
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && bash scripts/priority_listings_background.sh 30'
+
+================================================================================
+G. cron に手動キューを足す（30 分ごと・任意）
+================================================================================
+
+[Mac]（**初回1回だけ**のブロックと同じことをするなら、ファイル先頭の【初回1回だけ】の **1行**で足りる。ここは手で追記するとき用）
+
+ssh -t -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'crontab -e'
+
+[Mac]（エディタで次の **1 行**を追記して保存。コピペ用の 1 行はこれ）
+
+*/30 * * * * cd /opt/export-bot && bash scripts/priority_listings_background.sh >> logs/cron_priority_bg.log 2>&1
+
+================================================================================
+H. systemd で手動キュー（任意・初回だけ install してから）
+================================================================================
+
+[Mac]
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'sudo bash /opt/export-bot/scripts/install_priority_systemd.sh && sudo systemctl start export-bot-priority@all'
+
+[Mac]（ログを流し見する。止めるときは Ctrl+C）
+
+ssh -t -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'sudo journalctl -u export-bot-priority@all -f'
+
+================================================================================
+I. メルカリだけ VPN プロキシ（.env）
+================================================================================
+
+[Mac]
+
+ssh -t -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'nano /opt/export-bot/.env'
+
+[Mac]（.env に追記する例。1 行。ポートは自分の VPN クライアントに合わせる）
+
+MERCARI_PROXY_SERVER=http://127.0.0.1:7890
+
+[Mac]
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && ./venv/bin/pip install -r requirements.txt'
+
+================================================================================
+J. 動いてるか確認
+================================================================================
+
+[Mac]（注意：**手動キュー用 cron はサーバ側だけ**。Mac で `crontab -l` しても `priority_listings` は出ない。空なのが普通）
+
+[Mac]
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'crontab -l | grep -E "priority_listings|export-bot" || crontab -l; echo "---"; tail -n 40 /opt/export-bot/logs/cron_priority_bg.log; echo "---"; ps aux | grep -E "auto_lister|python3" | grep -v grep | head; echo "---"; free -h; echo "---"; cd /opt/export-bot && bash scripts/vps_health_check.sh'
+
+================================================================================
+K. Google スプレッドシート「手動」タブの列（位置はずさない）
+================================================================================
+
+  A … メルカリ URL（自分が入れる）
+  B … 期待利益 円（自分が入れる）
+  C … 出品価格 $（自動）
+  D … eBay ItemID（自動）
+  E … ステータス（自動。成功すると C〜E に出る。翌日 0 時頃に出品済み行が掃除）
+
+  ステータスが D 列（eBayItemID）に出て E が空に見える場合:
+    → VPS のコードが古いか、config の PRIORITY_SHEET_NAME とスプレッドシートのタブ名が一致していない。
+      B（deploy + pip）で更新し、タブ名は「手動」の前後に空白がないか確認する。
+
+================================================================================
+L. VPS が重い・Swap が張り付く（「机が狭い」対策）
+================================================================================
+
+  いまのサーバはメモリ約 2GB。メルカリを裏で開く処理は「机」をたくさん使うので、
+  足りなくなると遅くなる・失敗しやすくなる（Swap がほぼ 100% になるのがそのサイン）。
+
+  まず試すこと（上から）:
+    1. 同じ出品を二重に動かさない（ターミナルを2つで auto_lister を並列にしない）
+    2. 落ち着いた時間にサーバを一度再起動する（下のコマンド）
+    3. Mac で deploy して最新コードにする（以前は「チェック処理」が二重に走る設定だったが、
+       直してメモリを無駄に使わないようにした）
+    4. それでもキツい → ConoHa で「メモリ多めのプラン」に変える（課金）
+
+[Mac]
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'sudo reboot'
+
+================================================================================
+M. メモリは足りてる？（ConoHa 画面の限界）・スクレイプ失敗の対処
+================================================================================
+
+■ メモリ（「VPN」と言っている場合、多くは VPS＝このサーバの RAM のこと）
+  ConoHa のダッシュボード（一覧で緑ランプ・再起動ボタンがある画面）だけでは、
+  RAM 使用量・空き・Swap 割合は表示されません。課金でプランを上げる判断は、
+  次の **1行**で数値を見てください。
+
+[Mac]
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && bash scripts/vps_health_check.sh'
+
+  「No such file」→ まだ Mac から deploy していない。B（deploy.sh）のあと再度このコマンド。
+  それまでの代替（**リモートで** 1 行・スクリプト不要）:
+
+[Mac]
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'free -h; echo ""; df -h /; echo ""; ps aux --sort=-%mem 2>/dev/null | head -12'
+
+  目安: available が常に極端に少ない、Swap が 80〜100% 張り付き →
+  Chromium（Playwright）と重なりタイムアウトやスクレイプ失敗の原因になりやすい。
+  RAM 増は有効な対策のひとつ（あわせて負荷低い時間の reboot・不要プロセス確認）。
+
+■ スクレイプ失敗の対策（複数を組み合わせる）
+  1. メルカリだけプロキシ（上の I）— 直結でブロックされやすいとき
+  2. VPS の .env で待ち・リトライを延ばす例（負荷・回線が遅いとき）:
+       MERCARI_PAGE_GOTO_TIMEOUT_MS=60000
+       MERCARI_SCRAPE_MAX_RETRIES=5
+       MERCARI_SCRAPE_RETRY_BASE_SEC=5
+     変更後: ./venv/bin/pip install -r requirements.txt は不要（Python の再起動で反映）
+  3. メモリ・Swap を抑える（L / vps_health_check）
+  4. 失敗行のステータスに短いエラー理由が付く（最新コードデプロイ後）— ログと照合
+  5. メルカリ側のレート制限 — 時間を空けて再実行
+
+================================================================================
+N. 緊急：eBay を在庫あり（数量1）に戻す
+================================================================================
+
+■ 復旧スクリプトのルール（1行）
+  メルカリ公式APIが「販売中」のときだけ eBay を 1 に戻す。売り切れ等は触らない。
+
+■ 背景（短く）
+  在庫管理の誤判定で eBay だけ 0 になった → 復旧は下のコマンド。
+  いまの在庫管理は **config 既定でメルカリ照合〜OOS 適用がオン**（`.env` で `INVENTORY_APPLY_EBAY_OOS=0` のときだけオフ）。
+
+■ 時間
+  件数が多いと 1〜数時間。**接続が切れないよう**安定したネットで実行（Mac のターミナルは閉じない）。
+
+■ 場所
+  VPS（サーバ）のみ。Mac のディスク上ではない。
+
+[Mac]（まずはこれ・パスワード1回）
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && bash scripts/emergency_restore_inventory.sh'
+
+  ※ deploy 済みで scripts が無いとき（フォールバック・長時間）:
+
+[Mac]
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && ./venv/bin/python3 ebay_restock_all.py --ignore-sold-csv 2>&1 | tee logs/emergency_restock_$(date +%Y%m%d%H%M).log'
+
+  **誤 OOS を「購入手続みへ」で洗い、最大500件まで（在庫表 D 列で URL 補完・Playwright）**
+    - `ebay_restock_all` は API のみ・SKU にメルカリが無いと落ちる。在庫管理が誤って 0 にした疑いで **実ページ確認**したいとき:
+    - **[VPS]**
+      `cd /opt/export-bot` のあと:
+      `./venv/bin/python3 -u scripts/repair_false_ebay_oos_vs_mercari.py --dry-run --limit 500`
+      問題なければ: `./venv/bin/python3 -u scripts/repair_false_ebay_oos_vs_mercari.py --apply --limit 500 --ignore-sold-csv`
+    - ログ横に `tee` してもよい。レポート CSV は `logs/repair_false_oos_report_*.csv`。
+
+  **一括リストック → 在庫1周 → 在庫 cron を 3 時間に（まとめて）**
+    - **[Mac]** 先にコード反映: `cd "/Users/miyazakijunnosuke/Downloads/eBay/海外輸出ボット" && VPS_IP=133.117.76.193 bash deploy.sh`
+    - **Mac で `cd /opt/export-bot` や `bash scripts/vps_restock_all_then_inventory.sh` を実行しない**（そのパス・venv は VPS のみ）。必ず **SSH 先**か **ssh '...' 1 行**。
+    - **[Mac] 1 行（誤 SOLD 対策・推奨）**
+      `ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && bash scripts/vps_restock_all_then_inventory.sh ignore'`
+    - **[VPS]** すでに `ssh root@...` 済みなら `cd /opt/export-bot` のあと（誤 SOLD 付きの緊急なら `ignore`）:
+      `bash scripts/vps_restock_all_then_inventory.sh ignore`
+      （通常は `bash scripts/vps_restock_all_then_inventory.sh` でよい）
+    - **[VPS]** 在庫だけ 3 時間に（`inventory_manager` 行が毎時のとき）:
+      `crontab -l | sed '/inventory_manager\.py/ s/^0 \* \* \* \*/0 *\/3 * * */' | crontab -`
+      `crontab -l | grep inventory_manager`
+
+  **緊急：メルカリを見ず Active 在庫0をすべて eBay=1 → すぐ在庫1周（SSH が切れやすいときは nohup）**
+    - **メルカリ未確認のため、本当にメルカリ売切の行は二重販売リスクあり**。CEO判断の緊急時のみ。
+    - **[Mac] SSH が途中で Operation timed out になりやすい** → VPS でバックグラウンド実行:
+      `ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && nohup bash scripts/vps_force_ebay_zero_to_one_then_inventory.sh >> logs/force_qty1_nohup_$(date +%Y%m%d_%H%M).log 2>&1 & echo started_PID=$!'`
+    - **[Mac] フォアグラウンドでよいとき（ターミナルを閉じない）**
+      `ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 'cd /opt/export-bot && bash scripts/vps_force_ebay_zero_to_one_then_inventory.sh'`
+    - **[VPS]** すでにログイン済みなら: `cd /opt/export-bot && bash scripts/vps_force_ebay_zero_to_one_then_inventory.sh`
+    - 進捗: `tail -f /opt/export-bot/logs/force_qty1_then_inv_*.log`（最新1本に読み替え）
+
+================================================================================
+O. 在庫管理（いま何が自動で回るか）
+================================================================================
+
+  **必須（ビジネスの要）**
+    - **VPS の cron が `inventory_manager.py` を起動する**ことは **必須**（既定例は **3時間に1回**・JST 0/3/6/9/12/15/18/21 時 0 分。`scripts/vps.crontab.example` 参照）。Macを付けていなくても実行される。**crontab からこの行を削除しない**。止めるのは CEO が明示したときと障害対応に必要なときだけ。
+
+  **在庫だけ「毎時 → 3時間に1回」に直す（VPS・既存 crontab があるとき）**
+    - リポジトリの例は `deploy.sh` で VPS に届くが、**crontab 本体は自動では変わらない**。次のどちらかで **inventory 行だけ**合わせる。
+    - **A. `crontab -e`** で、`inventory_manager.py` の行の時刻を **`0 */3 * * *`** にする（`0 * * * *` なら置換）。
+    - **B. 一発（inventory 行が毎時0分の1行だけのとき）** — **[VPS]** で:
+      `crontab -l | sed '/inventory_manager\.py/ s/^0 \* \* \* \*/0 *\/3 * * */' | crontab -`
+      複数行に同パターンがある場合は **A** を使う。
+
+  **なぜ「cron は動いているのに eBay が変わらない」ことがあったか（非エンジニア向け）**
+    - **サーバは cron の間隔どおりプログラムを起動していた**（cron は正常）。
+    - その中に **「メルカリの結果を eBay の在庫に反映する」一段**があり、昔の初期設定では **ここだけ電源が入っていない状態**だった（コード上の既定がオフ）。あわせて **VPS の `.env` に「オフ」と書いた行が残っている**と、そちらが優先され **ずっとオフのまま**になる。
+    - **いまのコード**は既定をオンに直してある。**古い `.env` の `INVENTORY_APPLY_EBAY_OOS=0` が残っているとまだオフ**なので、O 節の grep で確認する。
+
+  **一言で**
+    - **メルカリを見て eBay を合わせる処理**は **`config.py` の `INVENTORY_APPLY_EBAY_OOS` 既定 True**（deploy 済みコードが VPS に乗っている前提）。
+    - **止めたいときだけ** VPS の `.env` に **`INVENTORY_APPLY_EBAY_OOS=0`** または **`false`** を1行書く（行を消せば既定のオンに戻る）。
+    - **以前 `.env` に `0` を書いている場合**は、その行が残っている限り **オフのまま**。オンに戻すなら **行を削除**するか **`INVENTORY_APPLY_EBAY_OOS=1`** にする。
+
+  **1回の在庫ジョブで eBay在庫0を何件までにするか**
+    - **`MAX_OUT_OF_STOCK_PER_RUN`**。`config.py` の **未設定時は 0＝無制限**（その回の売切は途中で止めず最後まで処理）。
+    - **VPS の `.env` に `MAX_OUT_OF_STOCK_PER_RUN=80` のように正の整数を書いている場合だけ**、その数字が1回あたりの上限（昔の既定と同じ挙動）。行を消せば **無制限に戻る**。
+
+  **「在庫ありが全部消えた」に近いときの Slack**
+    - apply=1 の処理のあと **eBay Active をもう一度取り直し**、**在庫>=1 の件数**を通常の1周 Slack に載せる。
+    - **開始時が `INVENTORY_ANOMALY_MIN_START_ACTIVE` 件以上**（既定30）かつ **終了時が `INVENTORY_ANOMALY_MAX_END_ACTIVE` 件以下**（既定0＝「0件なら異常の疑い」）のとき、**追加で `🚨 在庫管理・異常の疑い`** を同じ `SLACK_WEBHOOK_URL_ORDERS` に送る。手順は **N 節（緊急復旧）**。
+    - 終了時に「在庫ありが5件までならアラート」としたいときは VPS `.env` に **`INVENTORY_ANOMALY_MAX_END_ACTIVE=5`**。開始時の下限を上げたいときは **`INVENTORY_ANOMALY_MIN_START_ACTIVE=50`** など。
+
+  **メルカリURLが無い出品（手元在庫の eBay のみ等）**
+    - メルカリ照合の **対象外**。ログは `スキップ（メルカリ未連携）` と出るだけで、不良ではない。
+
+  **Slack（毎回1通）**
+    - 在庫ジョブが一周するたび **`SLACK_WEBHOOK_URL_ORDERS`** 先に `📦 在庫管理・1周終了` と結果サマリが届く（cron の生存確認にも使える）。
+
+  **ログで「本当に照合まで走ったか」**
+    - `logs/cron_inventory.log` の **`INVENTORY_PIPELINE_RESULT`** 1行を見る。
+      - `apply=1` … その回は **Playwright/API まで実行**
+      - `apply=0` … **`.env` でオフにしている**などで照合はスキップ
+
+  **Mac で一発確認**
+
+[Mac]
+
+cd "/Users/miyazakijunnosuke/Downloads/eBay/海外輸出ボット" && bash scripts/mac_inventory_status.sh
+
+[Mac]（.env の該当行だけ見る）
+
+ssh -o ServerAliveInterval=60 -o StrictHostKeyChecking=accept-new root@133.117.76.193 "grep -E '^INVENTORY_APPLY_EBAY_OOS' /opt/export-bot/.env 2>/dev/null || echo '(未定義＝config 既定でオン)'"
+
+================================================================================
+# よくある間違い（読むだけ）
+================================================================================
+
+  Mac で cd /opt/export-bot → 無い（**代わりに** `ssh root@133.117.76.193 'cd /opt/export-bot && ...'` の **1行**）
+  リモートで cd ~/Downloads/... → 無い。本番は `/opt/export-bot`
+  同じ `ssh` を何度も繰り返す → 不要なことが多い。**1行にまとまっているブロックをそのまま貼る**
+  VPS で disable_mac_cron_*.sh → Mac 専用。VPS では無意味（害はほぼなし）
+  毎回 vps_setup.sh → 初回だけ。通常は pip も毎回不要（requirements を変えたとき／ImportError のときだけ）
+  deploy のあとに出る長文を全部毎回やる → **不要**。`✅ 転送完了` で多くの場合は終わり
+  迷った → 上の A を実行
+
+  在庫の全体像は **O 節**（既定でメルカリ照合オン。止めるときだけ `.env` でオフ）。
+
+  手動出品の自動化は「Mac の VPN」ではなく、VPS 上で動く（cron / systemd / 手動実行）。
+  メルカリの取得だけ、VPS の .env で MERCARI_PROXY_*（I）を使うとプロキシ経由になる。
+  eBay API やスプレッドシート更新は通常そのまま（プロキシはメルカリ向けの設定が中心）。
+
+================================================================================

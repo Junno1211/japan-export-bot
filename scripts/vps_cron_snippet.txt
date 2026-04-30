@@ -1,0 +1,9 @@
+# 旧: 1行ずつ手で貼る用のメモ
+# 現在はまとめて使う: scripts/vps.crontab.example を参照してください。
+#
+# BOT を /opt/export-bot に置いた場合の例:
+#
+# 0 */3 * * * cd /opt/export-bot && ./venv/bin/python3 -u inventory_manager.py >> logs/cron_inventory.log 2>&1
+# 5 * * * * cd /opt/export-bot && ./venv/bin/python3 -u order_monitor.py >> logs/cron_orders.log 2>&1
+#
+# 適用: sed "s|/opt/export-bot|/あなたのパス|g" scripts/vps.crontab.example | crontab -

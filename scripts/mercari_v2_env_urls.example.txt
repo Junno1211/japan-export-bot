@@ -1,0 +1,11 @@
+# 1行1URL。# で始まる行はスクリプトが無視します。
+#
+# 【ターミナルに貼るとき】zsh は既定だと行頭の # がコメントにならないことがあります。
+#   説明文の「# エディタで…」のような行をそのまま貼ると command not found: # になります。
+#   貼るのは次の2行だけにしてください（# で始まる行は貼らない）。
+#
+#   cp scripts/mercari_v2_env_urls.example.txt urls.txt
+#   python3 scripts/mercari_v2_env_compare_head.py urls.txt
+#
+# 下の1行は動作確認用（存在しないIDなら404等になるのは正常）。実URLに差し替えてください。
+https://jp.mercari.com/item/m00000000000
